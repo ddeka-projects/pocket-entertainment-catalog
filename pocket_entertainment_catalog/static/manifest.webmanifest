@@ -1,0 +1,17 @@
+{
+  "name": "Pocket Entertainment Catalog",
+  "short_name": "Pocket Catalog",
+  "description": "A personal catalog for entertainment journeys.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1115",
+  "theme_color": "#111418",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

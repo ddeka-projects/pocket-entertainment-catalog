@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111418">
+    <meta name="description" content="A personal catalog for entertainment journeys.">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <title>Pocket Entertainment Catalog</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#catalog-grid">Skip to catalog</a>
+
+    <header class="app-header">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div>
+          <p class="eyebrow">Pocket</p>
+          <h1>Entertainment Catalog</h1>
+        </div>
+      </div>
+
+      <button class="sync-pill" id="sync-button" type="button" aria-label="Catalog storage status">
+        <span class="sync-dot" aria-hidden="true"></span>
+        <span id="sync-label">Connecting</span>
+      </button>
+    </header>
+
+    <main class="app-shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Your journey, one entry at a time</p>
+          <h2 id="hero-title">What’s next?</h2>
+          <p id="catalog-summary">Loading your catalog…</p>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <span class="orbit-number" id="total-count">—</span>
+          <span class="orbit-label">journeys</span>
+        </div>
+      </section>
+
+      <section class="catalog-controls" aria-label="Catalog filters">
+        <label class="search-field" for="catalog-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m21 21-4.35-4.35m2.35-5.4A7.75 7.75 0 1 1 3.5 11.25a7.75 7.75 0 0 1 15.5 0Z"></path>
+          </svg>
+          <input id="catalog-search" type="search" placeholder="Search titles, units, or notes" autocomplete="off">
+          <kbd aria-hidden="true">/</kbd>
+        </label>
+
+        <div class="filter-row status-filters" id="status-filters" role="group" aria-label="Filter by lifecycle status"></div>
+        <div class="filter-row media-filters" id="media-filters" role="group" aria-label="Filter by media type"></div>
+
+        <div class="results-toolbar">
+          <p id="results-count" aria-live="polite">Loading…</p>
+          <label class="sort-control" for="catalog-sort">
+            <span>Sort</span>
+            <select id="catalog-sort">
+              <option value="journey">Journey order</option>
+              <option value="title">Title A–Z</option>
+              <option value="updated">Recently updated</option>
+              <option value="rating">Highest rated</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="catalog-grid" id="catalog-grid" aria-label="Catalog entries" aria-busy="true"></section>
+
+      <section class="empty-state" id="empty-state" hidden>
+        <div class="empty-symbol" aria-hidden="true">✦</div>
+        <h2>No journeys found</h2>
+        <p>Try clearing a filter, or add something new to investigate.</p>
+        <button class="secondary-button" id="clear-filters" type="button">Clear filters</button>
+      </section>
+    </main>
+
+    <button class="add-button" id="add-entry" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      <span>Add journey</span>
+    </button>
+
+    <div class="sheet-layer" id="sheet-layer" hidden>
+      <button class="sheet-scrim" id="sheet-scrim" type="button" aria-label="Close"></button>
+      <section class="sheet" id="entry-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow" id="sheet-eyebrow">Journey</p>
+            <h2 id="sheet-title">Entry</h2>
+          </div>
+          <button class="icon-button" id="close-sheet" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
+        </header>
+        <div class="sheet-body" id="sheet-body"></div>
+      </section>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>
