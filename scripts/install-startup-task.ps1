@@ -7,25 +7,31 @@ $ErrorActionPreference = "Stop"
 
 $TaskName = "Pocket Entertainment Catalog"
 $Root = Split-Path -Parent $PSScriptRoot
-$RunScript = Join-Path $PSScriptRoot "run-server.ps1"
-$PowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$BackgroundRunner = Join-Path $PSScriptRoot "run-server-background.pyw"
+$RuntimeHelpers = Join-Path $PSScriptRoot "python-runtime.ps1"
 $CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentPrincipal = New-Object System.Security.Principal.WindowsPrincipal($CurrentIdentity)
 $IsAdministrator = $CurrentPrincipal.IsInRole(
     [System.Security.Principal.WindowsBuiltInRole]::Administrator
 )
 
-if (-not (Test-Path -LiteralPath $RunScript -PathType Leaf)) {
-    throw "Could not find the server launcher: $RunScript"
+if (-not (Test-Path -LiteralPath $BackgroundRunner -PathType Leaf)) {
+    throw "Could not find the background server launcher: $BackgroundRunner"
 }
+
+if (-not (Test-Path -LiteralPath $RuntimeHelpers -PathType Leaf)) {
+    throw "Could not find the Python runtime helpers: $RuntimeHelpers"
+}
+. $RuntimeHelpers
 
 if (-not (Test-Path -LiteralPath (Join-Path $Root "run.py") -PathType Leaf)) {
     throw "Could not find run.py under the project folder: $Root"
 }
 
+$Pythonw = Resolve-PocketCatalogPythonw -Root $Root
 $Action = New-ScheduledTaskAction `
-    -Execute $PowerShell `
-    -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunScript`"" `
+    -Execute $Pythonw `
+    -Argument "-B `"$BackgroundRunner`"" `
     -WorkingDirectory $Root
 
 if ($Mode -eq "SystemStartup") {
@@ -70,6 +76,7 @@ Start-ScheduledTask -TaskName $TaskName
 
 Write-Host "Installed and started scheduled task: $TaskName"
 Write-Host "Mode: $Mode"
+Write-Host "Background Python: $Pythonw"
 if ($Mode -eq "UserLogon") {
     Write-Host "The server will start whenever $($CurrentIdentity.Name) signs in."
     Write-Host "This mode preserves that user's Git identity and GitHub credentials."

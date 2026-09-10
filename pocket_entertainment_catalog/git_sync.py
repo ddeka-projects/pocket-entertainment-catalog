@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import subprocess
 import threading
@@ -186,6 +187,9 @@ class GitSync:
         check: bool = True,
         timeout: int = 30,
     ) -> subprocess.CompletedProcess[str]:
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         result = subprocess.run(
             ["git", "-C", str(self.repository), *arguments],
             stdin=subprocess.DEVNULL,
@@ -194,6 +198,7 @@ class GitSync:
             text=True,
             timeout=timeout,
             check=False,
+            creationflags=creationflags,
         )
         if check and result.returncode != 0:
             raise RuntimeError(self._detail(result, f"git {' '.join(arguments)} failed."))

@@ -32,7 +32,7 @@ Stop it with `Ctrl+C`, then install and immediately start the scheduled task:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 ```
 
-The task is named `Pocket Entertainment Catalog`. It starts at user logon, ignores duplicate starts, and retries up to three times when the server exits with an error. Logs are appended to:
+The task is named `Pocket Entertainment Catalog`. It starts at user logon without opening a terminal, ignores duplicate starts, and retries up to three times when the server exits with an error. Logs are appended to:
 
 ```text
 .tmp\server.log
@@ -44,7 +44,7 @@ If Python is not discovered automatically, add its full path to `.env`:
 POCKET_CATALOG_PYTHON=C:\Python313\python.exe
 ```
 
-Use a stable Python installation path; the scripts require Python 3.10 or newer.
+Use a stable Python installation path; the scripts require Python 3.10 or newer. The scheduled task uses the console-free `pythonw.exe` installed beside the configured `python.exe`.
 
 For a true machine-boot task that runs before anyone signs in, open PowerShell as Administrator and install the alternative mode:
 
@@ -60,7 +60,7 @@ Changing modes replaces the existing task. To stop and remove either version:
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1
 ```
 
-If the task exists but the phone cannot connect, allow the selected Python executable through Windows Defender Firewall on **Private** networks and confirm that the phone and PC are on the same network. Use the PC's LAN address, such as `http://192.168.1.20:8766/`, rather than `localhost` on the phone.
+If the task exists but the phone cannot connect, allow the `pythonw.exe` path printed by the installer through Windows Defender Firewall on **Private** networks and confirm that the phone and PC are on the same network. Use the PC's LAN address, such as `http://192.168.1.20:8766/`, rather than `localhost` on the phone.
 
 ## What the first version supports
 
@@ -105,6 +105,7 @@ POCKET_CATALOG_HOST=0.0.0.0
 POCKET_CATALOG_PORT=8766
 POCKET_CATALOG_PUBLIC_HOST=
 POCKET_CATALOG_DATA=data/catalog.jsonl
+POCKET_CATALOG_PYTHON=
 ```
 
 `0.0.0.0` allows private-network devices to connect. `POCKET_CATALOG_PUBLIC_HOST` only changes the address printed at startup and is normally discovered automatically.
