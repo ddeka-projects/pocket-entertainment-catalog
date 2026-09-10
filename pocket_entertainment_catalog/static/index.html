@@ -57,15 +57,21 @@
 
         <div class="results-toolbar">
           <p id="results-count" aria-live="polite">Loading…</p>
-          <label class="sort-control" for="catalog-sort">
-            <span>Sort</span>
+          <div class="sort-control">
+            <label for="catalog-sort">Sort</label>
             <select id="catalog-sort">
               <option value="journey">Journey order</option>
-              <option value="title">Title A–Z</option>
-              <option value="updated">Recently updated</option>
-              <option value="rating">Highest rated</option>
+              <option value="title">Title</option>
+              <option value="updated">Last updated</option>
+              <option value="rating">Rating</option>
             </select>
-          </label>
+            <button class="sort-direction" id="sort-direction" type="button" data-direction="desc" aria-label="Latest catalog entries first">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path class="arrow-up" d="M8 17V7m0 0L4.75 10.25M8 7l3.25 3.25"></path>
+                <path class="arrow-down" d="M16 7v10m0 0-3.25-3.25M16 17l3.25-3.25"></path>
+              </svg>
+            </button>
+          </div>
         </div>
       </section>
 

@@ -38,6 +38,7 @@ const elements = {
   empty: document.querySelector("#empty-state"),
   search: document.querySelector("#catalog-search"),
   sort: document.querySelector("#catalog-sort"),
+  sortDirection: document.querySelector("#sort-direction"),
   statusFilters: document.querySelector("#status-filters"),
   mediaFilters: document.querySelector("#media-filters"),
   resultCount: document.querySelector("#results-count"),
@@ -65,6 +66,12 @@ const state = {
   mediaFilter: "all",
   search: "",
   sort: "journey",
+  sortDirections: {
+    journey: "desc",
+    title: "asc",
+    updated: "desc",
+    rating: "desc",
+  },
   sync: { state: "pending", message: "Connecting to the catalog." },
   editor: { owned: false, claimed: false, heartbeat: null, heartbeatBusy: false },
   sheet: { mode: null, entryId: null, returnFocus: null, dirty: false },
@@ -260,19 +267,52 @@ function visibleEntries() {
     ].filter(Boolean).join(" ")).includes(query);
   });
 
+  const direction = state.sortDirections[state.sort] === "asc" ? 1 : -1;
   return filtered.sort((left, right) => {
     const a = left.record;
     const b = right.record;
     if (state.sort === "title") {
-      return a.work_title.localeCompare(b.work_title, undefined, { sensitivity: "base", numeric: true })
-        || (a.unit_title || "").localeCompare(b.unit_title || "", undefined, { sensitivity: "base", numeric: true });
+      const comparison = a.work_title.localeCompare(b.work_title, undefined, { sensitivity: "base", numeric: true })
+        || (a.unit_title || "").localeCompare(b.unit_title || "", undefined, { sensitivity: "base", numeric: true })
+        || left.ordinal - right.ordinal;
+      return comparison * direction;
     }
-    if (state.sort === "updated") return b.updated_at.localeCompare(a.updated_at) || b.ordinal - a.ordinal;
+    if (state.sort === "updated") {
+      return (a.updated_at.localeCompare(b.updated_at) || left.ordinal - right.ordinal) * direction;
+    }
     if (state.sort === "rating") {
-      return (b.rating ?? -1) - (a.rating ?? -1) || b.ordinal - a.ordinal;
+      if (a.rating === null && b.rating !== null) return 1;
+      if (a.rating !== null && b.rating === null) return -1;
+      return ((a.rating ?? 0) - (b.rating ?? 0) || left.ordinal - right.ordinal) * direction;
     }
-    return b.ordinal - a.ordinal;
+    return (left.ordinal - right.ordinal) * direction;
   });
+}
+
+function updateSortDirectionControl() {
+  const direction = state.sortDirections[state.sort];
+  const descriptions = {
+    journey: {
+      asc: "Earliest catalog entries first",
+      desc: "Latest catalog entries first",
+    },
+    title: {
+      asc: "Titles from A to Z",
+      desc: "Titles from Z to A",
+    },
+    updated: {
+      asc: "Least recently updated first",
+      desc: "Most recently updated first",
+    },
+    rating: {
+      asc: "Lowest rated first; unrated entries remain last",
+      desc: "Highest rated first; unrated entries remain last",
+    },
+  };
+  const description = descriptions[state.sort][direction];
+  elements.sortDirection.dataset.direction = direction;
+  elements.sortDirection.setAttribute("aria-label", `${description}. Press to reverse.`);
+  elements.sortDirection.title = description;
 }
 
 function cardTemplate(entry) {
@@ -963,6 +1003,14 @@ elements.search.addEventListener("input", () => {
 
 elements.sort.addEventListener("change", () => {
   state.sort = elements.sort.value;
+  updateSortDirectionControl();
+  render();
+});
+
+elements.sortDirection.addEventListener("click", () => {
+  const current = state.sortDirections[state.sort];
+  state.sortDirections[state.sort] = current === "asc" ? "desc" : "asc";
+  updateSortDirectionControl();
   render();
 });
 
@@ -1076,4 +1124,5 @@ window.setInterval(async () => {
   }
 }, 10_000);
 
+updateSortDirectionControl();
 loadCatalog();

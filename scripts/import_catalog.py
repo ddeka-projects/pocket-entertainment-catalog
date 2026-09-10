@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 import unicodedata
 from collections import Counter
@@ -538,6 +539,29 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def validate_managed_catalog(records: list[dict[str, Any]]) -> None:
+    """Validate the live catalog without requiring its original import state."""
+
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from pocket_entertainment_catalog.model import (  # noqa: PLC0415
+        ModelError,
+        validate_catalog as validate_live_catalog,
+    )
+
+    try:
+        validate_live_catalog(records)
+    except ModelError as error:
+        raise CatalogImportError(f"Managed catalog is invalid: {error}") from error
+
+    imported_count = sum("import" in record for record in records)
+    if imported_count != EXPECTED_OUTPUT_RECORDS:
+        raise CatalogImportError(
+            f"Expected {EXPECTED_OUTPUT_RECORDS} original imported records, "
+            f"found {imported_count}"
+        )
+
+
 def existing_import_timestamp(path: Path) -> str | None:
     if not path.exists() or path.stat().st_size == 0:
         return None
@@ -629,7 +653,7 @@ def main() -> None:
     args = parse_args()
     if args.check:
         records = load_jsonl(args.output)
-        validate_catalog(records, expected_count=EXPECTED_OUTPUT_RECORDS)
+        validate_managed_catalog(records)
         print(summarize(records, []))
         return
 

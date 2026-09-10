@@ -20,7 +20,8 @@ class CatalogModelTests(unittest.TestCase):
         ]
         validated = validate_catalog(records)
 
-        self.assertEqual(310, len(validated))
+        self.assertGreaterEqual(len(validated), 310)
+        self.assertEqual(310, sum("import" in record for record in validated))
         self.assertEqual(
             {"anime", "animation", "game", "live_action_movie", "live_action_series", "manga", "visual_novel"},
             {record["media_type"] for record in validated},

@@ -406,6 +406,45 @@ a:focus-visible {
   background: var(--surface);
 }
 
+.sort-direction {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.sort-direction:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+}
+
+.sort-direction svg {
+  width: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.65;
+}
+
+.sort-direction path {
+  opacity: 0.3;
+  transition: opacity 140ms ease, stroke 140ms ease;
+}
+
+.sort-direction[data-direction="asc"] .arrow-up,
+.sort-direction[data-direction="desc"] .arrow-down {
+  stroke: var(--accent-bright);
+  opacity: 1;
+}
+
 .catalog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 285px), 1fr));
@@ -979,7 +1018,7 @@ body.sheet-open { overflow: hidden; }
   .hero-copy > p:last-child { font-size: 0.78rem; line-height: 1.4; }
   .search-field kbd { display: none; }
   .results-toolbar { align-items: flex-start; }
-  .sort-control > span { display: none; }
+  .sort-control > label { display: none; }
   .catalog-grid { grid-template-columns: 1fr; }
   .add-button span { display: none; }
   .add-button { width: 54px; height: 54px; justify-content: center; padding: 0; border-radius: 50%; }
