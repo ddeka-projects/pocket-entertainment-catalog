@@ -76,6 +76,7 @@ class HTTPApplicationTests(unittest.TestCase):
         status, payload = self.call("/api/catalog?deleted=include")
         self.assertEqual(200, status)
         self.assertEqual(1, len(payload["entries"]))  # type: ignore[index]
+        self.assertIn("paused", payload["statuses"])  # type: ignore[index]
 
         status, lightweight = self.call("/api/state")
         self.assertEqual(200, status)

@@ -45,6 +45,48 @@ class CatalogModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelError, "chronological"):
             validate_record(record)
 
+    def test_known_history_requires_every_date_through_current_status(self) -> None:
+        record = sample_record(
+            status="ongoing",
+            dates={
+                "investigated_on": None,
+                "planned_on": None,
+                "started_on": "2026-09-09",
+                "ended_on": None,
+            },
+        )
+        with self.assertRaisesRegex(ModelError, "every date through the current status"):
+            validate_record(record)
+
+    def test_only_legacy_imports_may_have_all_lifecycle_dates_unknown(self) -> None:
+        unknown_dates = {
+            "investigated_on": None,
+            "planned_on": None,
+            "started_on": None,
+            "ended_on": None,
+        }
+        with self.assertRaisesRegex(ModelError, "Only legacy imported"):
+            validate_record(sample_record(status="ongoing", dates=unknown_dates))
+
+        legacy = sample_record(
+            status="ongoing",
+            dates=unknown_dates,
+            **{"import": {"source": "planned"}},
+        )
+        self.assertEqual(unknown_dates, validate_record(legacy)["dates"])
+
+    def test_paused_requires_a_complete_started_prefix(self) -> None:
+        paused = sample_record(
+            status="paused",
+            dates={
+                "investigated_on": "2026-09-07",
+                "planned_on": "2026-09-08",
+                "started_on": "2026-09-09",
+                "ended_on": None,
+            },
+        )
+        self.assertEqual("paused", validate_record(paused)["status"])
+
     def test_technical_timestamp_is_distinct_from_lifecycle_date(self) -> None:
         record = sample_record(created_at="2026-09-09", updated_at="2026-09-09")
         with self.assertRaisesRegex(ModelError, "Timestamp"):

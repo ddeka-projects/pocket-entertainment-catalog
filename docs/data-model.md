@@ -43,7 +43,7 @@ Completed-sheet positions preserve the known old-to-new legacy order. Planned im
 | `work_title` | string | The only value the user must type for a new entry. |
 | `unit_title` | string or null | Flexible journey label such as `Season 1`, `Part 2`, or `Finale`. |
 | `media_type` | enum | `anime`, `animation`, `game`, `live_action_movie`, `live_action_series`, `manga`, or `visual_novel`. |
-| `status` | enum | `investigate`, `planned`, `ongoing`, `completed`, or `discontinued`. |
+| `status` | enum | `investigate`, `planned`, `ongoing`, `paused`, `completed`, or `discontinued`. |
 | `rating` | integer or null | Whole number from 1 through 10; permitted only for terminal statuses. |
 | `release_year` | integer or null | Four-digit year. |
 | `dates` | object | Nullable lifecycle calendar dates in `YYYY-MM-DD` form. |
@@ -58,10 +58,12 @@ Completed-sheet positions preserve the known old-to-new legacy order. Planned im
 
 - IDs are unique and immutable.
 - The combination of media type, case-insensitive work title, and case-insensitive unit title identifies one journey unit.
-- Known lifecycle dates must be chronological, though any legacy date may be null.
+- Untouched legacy imports may have all four lifecycle dates null. Otherwise every date through the current status is required.
+- Known lifecycle dates must be chronological; equal milestone dates are permitted.
 - Investigate entries cannot contain later-stage dates.
 - Planned entries cannot contain started or ended dates.
-- Ongoing entries cannot contain an ended date.
+- Ongoing and Paused entries require Investigated, Planned, and Started dates and cannot contain an Ended date.
+- Paused entries can transition only back to Ongoing; pausing and resuming preserve the original Started date.
 - Only Completed and Discontinued entries may have an ended date or rating.
 - Technical timestamps are exact UTC instants; lifecycle values are calendar dates and are used for user-facing analysis.
 - `updated_at` never precedes `created_at`; a non-null `deleted_at` falls between them.

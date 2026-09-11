@@ -10,7 +10,7 @@ The initial interface is mobile-first and uses the same application on a phone a
 
 The catalog screen has four layers:
 
-1. **At-a-glance summary** — total active journeys plus ongoing, planned, and investigate counts.
+1. **At-a-glance summary** — total active journeys plus ongoing, paused, planned, and investigate counts.
 2. **Find and narrow** — full-text search, lifecycle filters, media filters, and sorting.
 3. **Journey cards** — work title, optional unit, classification, status, relevant date, year, and rating.
 4. **Detail sheet** — notes/review, full lifecycle timeline, progress actions, corrections, and technical record information.
@@ -47,11 +47,14 @@ The lease controls the user experience, while three lower-level safeguards prote
 The normal path is intentionally strict:
 
 ```text
-Investigate → Planned → Ongoing ┬→ Completed
-                                └→ Discontinued
+Investigate → Planned → Ongoing ⇄ Paused
+                         ├→ Completed
+                         └→ Discontinued
 ```
 
-Each transition accepts a calendar date, not a timestamp. Terminal entries may receive an integer rating from 1 to 10. Historical imports may have unknown dates and ratings, so those fields remain nullable.
+Each dated transition accepts a calendar date, not a timestamp. Pausing and resuming preserve the original Started date and do not add a lifecycle milestone. A Paused journey must return to Ongoing before it can be completed or discontinued. Terminal entries may receive an integer rating from 1 to 10.
+
+Untouched historical imports may retain four unknown lifecycle dates. Once any lifecycle date is known, every milestone through the current status is required and chronological. If a normal transition is backdated before an earlier milestone—or follows a legacy record with missing prerequisites—the interface asks for confirmation before atomically aligning those affected earlier milestones to the selected date.
 
 “Correct history” is a separate, less prominent action for fixing old or mistaken records without weakening the everyday sequential workflow.
 

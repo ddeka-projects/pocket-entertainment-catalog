@@ -72,6 +72,107 @@ class CatalogServiceTests(unittest.TestCase):
         self.assertEqual("A strong ending.", completed["record"]["notes"])
         self.assertEqual("2026-09-12", completed["record"]["dates"]["ended_on"])
 
+    def test_backdated_transition_requires_and_applies_prior_date_alignment(self) -> None:
+        entry = self.service.catalog()["entries"][0]
+        planned = self.service.transition(
+            entry["record"]["id"],
+            {"status": "planned", "on": "2026-09-10"},
+            expected_etag=entry["etag"],
+        )["entry"]
+
+        with self.assertRaisesRegex(InvalidTransition, "aligned first"):
+            self.service.transition(
+                planned["record"]["id"],
+                {"status": "ongoing", "on": "2026-09-08"},
+                expected_etag=planned["etag"],
+            )
+
+        ongoing = self.service.transition(
+            planned["record"]["id"],
+            {
+                "status": "ongoing",
+                "on": "2026-09-08",
+                "adjust_prior_dates": True,
+            },
+            expected_etag=planned["etag"],
+        )["entry"]
+        self.assertEqual(
+            {
+                "investigated_on": "2026-09-08",
+                "planned_on": "2026-09-08",
+                "started_on": "2026-09-08",
+                "ended_on": None,
+            },
+            ongoing["record"]["dates"],
+        )
+
+    def test_transition_aligns_missing_legacy_dates_after_confirmation(self) -> None:
+        legacy = sample_record(
+            status="planned",
+            dates={
+                "investigated_on": None,
+                "planned_on": None,
+                "started_on": None,
+                "ended_on": None,
+            },
+            **{"import": {"source": "planned"}},
+        )
+        write_catalog(self.catalog_path, [legacy])
+        service = CatalogService(
+            CatalogStore(self.catalog_path),
+            EditorLease(),
+            self.git,  # type: ignore[arg-type]
+        )
+        entry = service.catalog()["entries"][0]
+
+        ongoing = service.transition(
+            entry["record"]["id"],
+            {
+                "status": "ongoing",
+                "on": "2026-09-09",
+                "adjust_prior_dates": True,
+            },
+            expected_etag=entry["etag"],
+        )["entry"]
+        self.assertEqual("2026-09-09", ongoing["record"]["dates"]["investigated_on"])
+        self.assertEqual("2026-09-09", ongoing["record"]["dates"]["planned_on"])
+        self.assertEqual("2026-09-09", ongoing["record"]["dates"]["started_on"])
+
+    def test_paused_can_only_resume_without_changing_started_date(self) -> None:
+        entry = self.service.catalog()["entries"][0]
+        planned = self.service.transition(
+            entry["record"]["id"],
+            {"status": "planned", "on": "2026-09-10"},
+            expected_etag=entry["etag"],
+        )["entry"]
+        ongoing = self.service.transition(
+            planned["record"]["id"],
+            {"status": "ongoing", "on": "2026-09-11"},
+            expected_etag=planned["etag"],
+        )["entry"]
+        paused = self.service.transition(
+            ongoing["record"]["id"],
+            {"status": "paused"},
+            expected_etag=ongoing["etag"],
+        )["entry"]
+
+        self.assertEqual("paused", paused["record"]["status"])
+        self.assertEqual("2026-09-11", paused["record"]["dates"]["started_on"])
+        with self.assertRaises(InvalidTransition):
+            self.service.transition(
+                paused["record"]["id"],
+                {"status": "completed", "on": "2026-09-12"},
+                expected_etag=paused["etag"],
+            )
+
+        resumed = self.service.transition(
+            paused["record"]["id"],
+            {"status": "ongoing"},
+            expected_etag=paused["etag"],
+        )["entry"]
+        self.assertEqual("ongoing", resumed["record"]["status"])
+        self.assertEqual("2026-09-11", resumed["record"]["dates"]["started_on"])
+
     def test_stale_etag_cannot_overwrite_a_newer_edit(self) -> None:
         entry = self.service.catalog()["entries"][0]
         self.service.update(

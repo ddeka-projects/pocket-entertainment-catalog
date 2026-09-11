@@ -14,11 +14,12 @@ const STATUS = {
   investigate: { label: "Investigate", color: "#9b9fa6" },
   planned: { label: "Planned", color: "#87add2" },
   ongoing: { label: "Ongoing", color: "#75c49d" },
+  paused: { label: "Paused", color: "#b49ad7" },
   completed: { label: "Completed", color: "#e8b86a" },
   discontinued: { label: "Discontinued", color: "#d9817d" },
 };
 
-const STATUS_ORDER = ["all", "ongoing", "planned", "investigate", "completed", "discontinued", "trash"];
+const STATUS_ORDER = ["all", "ongoing", "paused", "planned", "investigate", "completed", "discontinued", "trash"];
 const DATE_LABELS = {
   investigated_on: "Investigated",
   planned_on: "Planned",
@@ -28,9 +29,18 @@ const DATE_LABELS = {
 const NEXT_STATUS = {
   investigate: ["planned"],
   planned: ["ongoing"],
-  ongoing: ["completed", "discontinued"],
+  ongoing: ["paused", "completed", "discontinued"],
+  paused: ["ongoing"],
   completed: [],
   discontinued: [],
+};
+const STATUS_DATE_FIELDS = {
+  investigate: ["investigated_on"],
+  planned: ["investigated_on", "planned_on"],
+  ongoing: ["investigated_on", "planned_on", "started_on"],
+  paused: ["investigated_on", "planned_on", "started_on"],
+  completed: Object.keys(DATE_LABELS),
+  discontinued: Object.keys(DATE_LABELS),
 };
 
 const elements = {
@@ -344,6 +354,7 @@ function cardTemplate(entry) {
 function summaryText(counts) {
   const parts = [
     pluralCount(counts.ongoing || 0, "ongoing journey", "ongoing journeys"),
+    pluralCount(counts.paused || 0, "paused journey", "paused journeys"),
     pluralCount(counts.planned || 0, "planned next", "planned next"),
     pluralCount(counts.investigate || 0, "on your radar", "on your radar"),
   ];
@@ -385,6 +396,7 @@ function cardDate(record) {
     investigate: "investigated_on",
     planned: "planned_on",
     ongoing: "started_on",
+    paused: "started_on",
     completed: "ended_on",
     discontinued: "ended_on",
   }[record.status];
@@ -578,14 +590,8 @@ function renderDetail(entry) {
   }).join("");
 
   const transitions = record.deleted_at ? "" : NEXT_STATUS[record.status].map((target) => {
-    const labels = {
-      planned: "Move to planned",
-      ongoing: "Start journey",
-      completed: "Mark completed",
-      discontinued: "Discontinue",
-    };
-    const className = target === "discontinued" ? "danger-button" : "primary-button";
-    return `<button class="${className}" type="button" data-action="transition" data-target-status="${target}">${labels[target]}</button>`;
+    const className = target === "discontinued" ? "danger-button" : target === "paused" ? "secondary-button" : "primary-button";
+    return `<button class="${className}" type="button" data-action="transition" data-target-status="${target}">${transitionLabel(record.status, target)}</button>`;
   }).join("");
 
   const activeActions = record.deleted_at
@@ -707,30 +713,28 @@ async function openTransition(recordId, target) {
     toast("That journey is no longer available.", "error");
     return;
   }
-  const labels = {
-    planned: "Move to planned",
-    ongoing: "Start journey",
-    completed: "Complete journey",
-    discontinued: "Discontinue journey",
-  };
+  const label = transitionLabel(entry.record.status, target);
+  const isResume = entry.record.status === "paused" && target === "ongoing";
+  const changesLifecycleDate = target !== "paused" && !isResume;
   state.sheet.mode = "transition";
   state.sheet.entryId = recordId;
   state.sheet.dirty = false;
-  setSheetHeading(entry.record.unit_title || "Lifecycle update", labels[target]);
+  setSheetHeading(entry.record.unit_title || "Lifecycle update", label);
   const terminal = ["completed", "discontinued"].includes(target);
   elements.sheetBody.innerHTML = `
     <form id="transition-form" data-target-status="${target}">
       <p class="form-note">${escapeHTML(entry.record.work_title)} will move from <strong>${escapeHTML(statusInfo(entry.record.status).label)}</strong> to <strong>${escapeHTML(statusInfo(target).label)}</strong>.</p>
       <div class="form-grid">
-        <label class="field full">
+        ${changesLifecycleDate ? `<label class="field full">
           <span>${target === "ongoing" ? "Started on" : target === "planned" ? "Planned on" : "Ended on"}</span>
           <input name="on" type="date" required value="${today()}">
-        </label>
+          <small>If this predates missing or later milestones, you will be asked before they are aligned to this date.</small>
+        </label>` : `<p class="form-note full">The original Started date will be preserved; pausing and resuming do not add lifecycle dates.</p>`}
         ${terminal ? `<fieldset class="field full fieldset-reset"><legend>Rating <small>(optional)</small></legend>${ratingPicker(null)}</fieldset>` : ""}
         ${terminal ? `<label class="field full"><span>Final impression</span><textarea name="notes" maxlength="20000" placeholder="How did this journey leave you feeling?">${escapeHTML(entry.record.notes || "")}</textarea></label>` : ""}
       </div>
       <div class="form-actions">
-        <button class="${target === "discontinued" ? "danger-button" : "primary-button"}" type="submit">${labels[target]}</button>
+        <button class="${target === "discontinued" ? "danger-button" : target === "paused" ? "secondary-button" : "primary-button"}" type="submit">${label}</button>
         <button class="secondary-button" type="button" data-action="back-to-detail">Back</button>
       </div>
     </form>`;
@@ -759,7 +763,7 @@ async function openHistoryCorrection(recordId) {
     </label>`).join("");
   elements.sheetBody.innerHTML = `
     <form id="history-form">
-      <p class="warning-panel">This is for correcting backfilled or mistaken history. Normal progress should use the lifecycle buttons so states stay sequential.</p>
+      <p class="warning-panel">This is for correcting backfilled or mistaken history. Leave every date blank for untouched legacy history, or provide every milestone through the selected status in chronological order.</p>
       <div class="form-grid">
         <label class="field full"><span>Status</span><select name="status">${statusOptions}</select></label>
         ${dates}
@@ -779,13 +783,7 @@ function applyHistoryStatusRules() {
   const form = elements.sheetBody.querySelector("#history-form");
   if (!form) return;
   const status = form.elements.status.value;
-  const permitted = {
-    investigate: ["investigated_on"],
-    planned: ["investigated_on", "planned_on"],
-    ongoing: ["investigated_on", "planned_on", "started_on"],
-    completed: Object.keys(DATE_LABELS),
-    discontinued: Object.keys(DATE_LABELS),
-  }[status];
+  const permitted = STATUS_DATE_FIELDS[status];
   for (const field of Object.keys(DATE_LABELS)) {
     const input = form.elements[field];
     const enabled = permitted.includes(field);
@@ -840,7 +838,18 @@ async function submitTransition(form) {
   if (!entry) return;
   const data = new FormData(form);
   const target = form.dataset.targetStatus;
-  const payload = { status: target, on: data.get("on") };
+  const on = data.get("on");
+  const payload = { status: target };
+  if (on) {
+    payload.on = on;
+    const fieldsToAdjust = priorDatesToAlign(entry.record, target, on);
+    if (fieldsToAdjust.length) {
+      const labels = fieldsToAdjust.map((field) => DATE_LABELS[field]).join(" and ");
+      const message = `${labels} ${fieldsToAdjust.length === 1 ? "is" : "are"} missing or later than ${formatDate(on)}. Align ${fieldsToAdjust.length === 1 ? "it" : "them"} to ${formatDate(on)} and continue?`;
+      if (!window.confirm(message)) return;
+      payload.adjust_prior_dates = true;
+    }
+  }
   if (["completed", "discontinued"].includes(target)) {
     payload.rating = data.get("rating") || null;
     payload.notes = data.get("notes") || null;
@@ -856,6 +865,23 @@ async function submitTransition(form) {
     await releaseEditor();
     toast(`Journey moved to ${statusInfo(target).label}.`, "success");
   });
+}
+
+function transitionLabel(source, target) {
+  if (source === "paused" && target === "ongoing") return "Resume journey";
+  return {
+    planned: "Move to planned",
+    ongoing: "Start journey",
+    paused: "Pause journey",
+    completed: "Complete journey",
+    discontinued: "Discontinue journey",
+  }[target] || `Move to ${statusInfo(target).label}`;
+}
+
+function priorDatesToAlign(record, target, on) {
+  const fields = STATUS_DATE_FIELDS[target];
+  if (!fields || target === "paused" || (record.status === "paused" && target === "ongoing")) return [];
+  return fields.slice(0, -1).filter((field) => !record.dates[field] || record.dates[field] > on);
 }
 
 async function submitHistory(form) {

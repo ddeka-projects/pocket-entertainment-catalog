@@ -67,7 +67,8 @@ If the task exists but the phone cannot connect, allow the `pythonw.exe` path pr
 - Browse from any number of devices at the same time.
 - Search, sort, and filter by lifecycle status or media type.
 - Add a journey; only the work title needs to be typed. Media type defaults to the active filter or the last-used value.
-- Move entries through `Investigate → Planned → Ongoing → Completed / Discontinued` with lifecycle dates.
+- Move entries through `Investigate → Planned → Ongoing → Completed / Discontinued` with lifecycle dates, or pause an Ongoing journey and resume it later.
+- Confirm automatic alignment of missing or later prerequisite dates when recording a backdated transition.
 - Edit titles, flexible unit labels, media types, release years, notes/reviews, and terminal ratings.
 - Correct backfilled lifecycle history when the normal sequential workflow is not appropriate.
 - Soft-delete entries to Trash and restore them later.

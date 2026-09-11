@@ -13,6 +13,7 @@ from .model import (
     DATE_FIELDS,
     MEDIA_TYPES,
     STATUSES,
+    STATUS_DATE_FIELDS,
     TERMINAL_STATUSES,
     ModelError,
     local_calendar_date,
@@ -43,7 +44,8 @@ class InvalidTransition(ServiceError):
 TRANSITIONS = {
     "investigate": frozenset({"planned"}),
     "planned": frozenset({"ongoing"}),
-    "ongoing": frozenset({"completed", "discontinued"}),
+    "ongoing": frozenset({"paused", "completed", "discontinued"}),
+    "paused": frozenset({"ongoing"}),
     "completed": frozenset(),
     "discontinued": frozenset(),
 }
@@ -163,12 +165,15 @@ class CatalogService:
     ) -> dict[str, Any]:
         self._require_payload(
             payload,
-            {"status", "on", "rating", "notes"},
+            {"status", "on", "rating", "notes", "adjust_prior_dates"},
             required={"status"},
         )
         target = payload.get("status")
         if target not in STATUSES:
             raise InvalidRequest("status is invalid.")
+        adjust_prior_dates = payload.get("adjust_prior_dates", False)
+        if not isinstance(adjust_prior_dates, bool):
+            raise InvalidRequest("adjust_prior_dates must be true or false.")
         transition_on = payload.get("on") or local_calendar_date()
         try:
             parse_date(transition_on)
@@ -177,12 +182,30 @@ class CatalogService:
 
         def operation(record: dict[str, Any]) -> dict[str, Any]:
             self._require_active(record)
-            if target not in TRANSITIONS[record["status"]]:
+            source = record["status"]
+            if target not in TRANSITIONS[source]:
                 raise InvalidTransition(
-                    f"Cannot move {record['status']} directly to {target}."
+                    f"Cannot move {source} directly to {target}."
                 )
             record["status"] = target
-            record["dates"][TRANSITION_DATE[target]] = transition_on
+            is_resume = source == "paused" and target == "ongoing"
+            if target != "paused" and not is_resume:
+                transition_field = TRANSITION_DATE[target]
+                transition_date = parse_date(transition_on)
+                prior_fields = STATUS_DATE_FIELDS[target][:-1]
+                fields_to_adjust = [
+                    field
+                    for field in prior_fields
+                    if record["dates"][field] is None
+                    or parse_date(record["dates"][field]) > transition_date
+                ]
+                if fields_to_adjust and not adjust_prior_dates:
+                    raise InvalidTransition(
+                        "The selected date requires earlier lifecycle dates to be aligned first."
+                    )
+                for field in fields_to_adjust:
+                    record["dates"][field] = transition_on
+                record["dates"][transition_field] = transition_on
             record["rating"] = self._rating(payload.get("rating"), target)
             if "notes" in payload:
                 record["notes"] = self._notes(payload.get("notes"))

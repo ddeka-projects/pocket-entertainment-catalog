@@ -21,9 +21,24 @@ MEDIA_TYPES = (
     "manga",
     "visual_novel",
 )
-STATUSES = ("investigate", "planned", "ongoing", "completed", "discontinued")
+STATUSES = (
+    "investigate",
+    "planned",
+    "ongoing",
+    "paused",
+    "completed",
+    "discontinued",
+)
 TERMINAL_STATUSES = frozenset({"completed", "discontinued"})
 DATE_FIELDS = ("investigated_on", "planned_on", "started_on", "ended_on")
+STATUS_DATE_FIELDS = {
+    "investigate": DATE_FIELDS[:1],
+    "planned": DATE_FIELDS[:2],
+    "ongoing": DATE_FIELDS[:3],
+    "paused": DATE_FIELDS[:3],
+    "completed": DATE_FIELDS,
+    "discontinued": DATE_FIELDS,
+}
 
 _REQUIRED_FIELDS = {
     "id",
@@ -205,12 +220,20 @@ def validate_record(record: Mapping[str, Any]) -> dict[str, Any]:
     known_dates = [item for item in parsed_dates if item is not None]
     if known_dates != sorted(known_dates):
         raise ModelError("Lifecycle dates must be chronological when they are known.")
+    if not known_dates:
+        if "import" not in value:
+            raise ModelError("Only legacy imported entries may have all lifecycle dates unknown.")
+    else:
+        missing_dates = [field for field in STATUS_DATE_FIELDS[status] if dates[field] is None]
+        if missing_dates:
+            raise ModelError(
+                "Lifecycle history must include every date through the current status "
+                f"(missing={missing_dates})."
+            )
     if status == "investigate" and any(dates[field] is not None for field in DATE_FIELDS[1:]):
         raise ModelError("Investigate entries cannot have later lifecycle dates.")
     if status == "planned" and (dates["started_on"] is not None or dates["ended_on"] is not None):
         raise ModelError("Planned entries cannot have started or ended dates.")
-    if status == "ongoing" and dates["ended_on"] is not None:
-        raise ModelError("Ongoing entries cannot have an ended date.")
     if status not in TERMINAL_STATUSES and dates["ended_on"] is not None:
         raise ModelError("Only terminal entries may have an ended date.")
 
@@ -280,4 +303,3 @@ def validate_catalog(records: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
         journeys[key] = item["id"]
         validated.append(item)
     return validated
-

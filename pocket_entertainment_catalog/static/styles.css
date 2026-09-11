@@ -481,6 +481,7 @@ a:focus-visible {
 .entry-card[data-status="investigate"] { --status-color: #9b9fa6; }
 .entry-card[data-status="planned"] { --status-color: #87add2; }
 .entry-card[data-status="ongoing"] { --status-color: #75c49d; }
+.entry-card[data-status="paused"] { --status-color: #b49ad7; }
 .entry-card[data-status="completed"] { --status-color: #e8b86a; }
 .entry-card[data-status="discontinued"] { --status-color: #d9817d; }
 
@@ -720,6 +721,7 @@ a:focus-visible {
 .detail-chip[data-status="investigate"] { color: #9b9fa6; }
 .detail-chip[data-status="planned"] { color: #87add2; }
 .detail-chip[data-status="ongoing"] { color: #75c49d; }
+.detail-chip[data-status="paused"] { color: #b49ad7; }
 .detail-chip[data-status="completed"] { color: #e8b86a; }
 .detail-chip[data-status="discontinued"],
 .detail-chip[data-status="deleted"] { color: #d9817d; }
