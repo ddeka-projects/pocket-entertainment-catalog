@@ -152,6 +152,54 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.profile-switcher {
+  display: flex;
+  gap: 5px;
+  width: fit-content;
+  margin: 16px auto 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.profile-switcher a {
+  padding: 10px 27px;
+  border-radius: 10px;
+  color: var(--muted-strong);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.profile-switcher a[aria-current="page"] { color: var(--accent-ink); background: var(--accent); }
+.work-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 16px 0; }
+.work-controls[hidden], .pagination[hidden], .media-filters[hidden] { display: none; }
+.work-controls .field { flex: 1 1 140px; min-width: 0; }
+.work-controls select { max-width: 100%; }
+.work-profile .field select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 45px;
+  padding-right: 32px;
+  font-size: 0.8rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23a2a5ab' stroke-width='1.5'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+.backup-link { display: inline-flex; align-items: center; text-decoration: none; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 28px 0; color: var(--muted-strong); font-size: 0.8rem; }
+.work-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 0.7rem; }
+.priority-badge[data-priority="high"] { color: var(--accent-bright); }
+.category-list { margin-top: 25px; }
+.category-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 17px 0; border-top: 1px solid var(--line); }
+.category-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.category-row strong { font-size: 0.85rem; }
+.category-row small { display: block; margin-top: 5px; color: var(--muted); font-size: 0.72rem; }
+.category-actions { display: flex; flex-shrink: 0; gap: 6px; }
+@media (max-width: 480px) {
+  .category-row { flex-wrap: wrap; }
+  .category-actions { width: 100%; }
+}
+
 .sync-pill {
   display: inline-flex;
   flex: 0 0 auto;

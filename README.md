@@ -2,7 +2,25 @@
 
 A small, self-hosted catalog for tracking entertainment as journey units: a season, a movie, a game, a manga series, or any other continuous segment that makes sense at the time.
 
-The database is [`data/catalog.jsonl`](data/catalog.jsonl). The application uses only Python's standard library, so there is no package-install step.
+Use the **Journey** profile to track watching, reading, and gaming, and the **Work** profile to plan and track personal editing projects and tasks. Switch profiles using the tabs below the header. Both use the same mobile-friendly cards and editing sheets, with independent records and progress.
+
+Journey's database is [`data/catalog.jsonl`](data/catalog.jsonl), with automatic Git synchronization. Work uses a separate local SQLite database, created automatically on first startup. The application uses only Python's standard library, so there is no package-install step.
+
+## Work profile
+
+Open **Work** to add a project or task. Only the reserved **Uncategorized** category exists initially; no sample works or media categories are seeded. A work has a required work title and an optional unit title, so a season, trailer, or individual creator video can be grouped under its broader title or account. Repeated editing efforts can share titles and units; each gets a distinct, stable title-slug-plus-ULID ID.
+
+Works follow `Investigate → Planned → Ongoing ⇄ Paused → Completed / Discontinued`. A paused work must resume before finishing. Moving to Planned requires an explicit **High** or **Low** priority. Investigate has no priority; every later status retains a required, editable priority. Works have optional release years and notes, without ratings.
+
+Use **Categories** to create, rename, or delete categories. Names are unique after Unicode, whitespace, and case normalization. Work forms only select existing categories. Uncategorized is the default and cannot be renamed or deleted. Deleting another category atomically moves its works, including Trash, to Uncategorized.
+
+Lifecycle dates use Journey's chronology and backdating confirmation rules. **Correct dates** adjusts milestones for the current status without bypassing sequential transitions. Normal records cannot erase their entire lifecycle history. The storage model supports explicitly marked legacy records with all dates unknown for a later backfill; this release does not import historical data.
+
+Work searches, filters (status, category, kind, priority), sorting, and 48-record pagination run on the server. Work shares the single-editor lease and stale-record safeguards with Journey. Reads remain available to other devices.
+
+Work data lives in `data/editing.sqlite3` by default and is excluded from Git. It never creates catalog commits or pushes. Open the **Local storage** button in the header for **Download backup**, which produces a consistent SQLite snapshot, or **Export JSON**, which downloads all categories and works, including Trash. The first successful write each local day also creates a snapshot under `data/work-backups/`, retaining the latest seven daily snapshots for that database. Backup failures are logged separately from successful primary saves. These files are local: include them in your computer's backup plan.
+
+To restore a downloaded SQLite backup, stop the server, copy the backup over the configured Work database, and restart. Keep a copy of the database you are replacing. See [the Work data contract](docs/work-profile.md) for storage and API details.
 
 ## Start the app
 
@@ -106,10 +124,13 @@ POCKET_CATALOG_HOST=0.0.0.0
 POCKET_CATALOG_PORT=8766
 POCKET_CATALOG_PUBLIC_HOST=
 POCKET_CATALOG_DATA=data/catalog.jsonl
+POCKET_CATALOG_WORK_DATA=data/editing.sqlite3
 POCKET_CATALOG_PYTHON=
 ```
 
 `0.0.0.0` allows private-network devices to connect. `POCKET_CATALOG_PUBLIC_HOST` only changes the address printed at startup and is normally discovered automatically.
+
+`POCKET_CATALOG_WORK_DATA` accepts a local SQLite path, relative to the project folder or absolute. Its parent directory is created automatically. Keep custom database paths and backups out of Git as well. The database belongs on the server's local disk; phones access it through HTTP.
 
 This is a trusted-LAN application without user accounts. It rejects non-private peers and cross-origin mutations, but the port should never be exposed to the public internet.
 

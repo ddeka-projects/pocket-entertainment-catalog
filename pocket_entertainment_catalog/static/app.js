@@ -1,5 +1,8 @@
 "use strict";
 
+const isWork = new URLSearchParams(window.location.search).get("profile") === "work";
+const itemName = isWork ? "work" : "journey";
+
 const MEDIA = {
   anime: { label: "Anime", color: "#eaa2b6" },
   animation: { label: "Animation", color: "#91c4e3" },
@@ -88,6 +91,16 @@ const state = {
   loading: true,
   refreshing: false,
   catalogRevision: null,
+  categories: [],
+  categoryFilter: "all",
+  kindFilter: "all",
+  priorityFilter: "all",
+  page: 1,
+  pages: 1,
+  total: 0,
+  counts: {},
+  workRequest: 0,
+  detailEntry: null,
 };
 
 const clientId = persistentIdentity();
@@ -124,6 +137,7 @@ function persistentIdentity() {
 }
 
 async function request(path, options = {}) {
+  if (isWork && path.startsWith("/api/entries")) path = path.replace("/api/entries", "/api/work/entries");
   const method = options.method || "GET";
   const headers = { Accept: "application/json" };
   let body;
@@ -166,6 +180,7 @@ async function request(path, options = {}) {
 }
 
 async function loadCatalog({ quiet = false } = {}) {
+  if (isWork) return loadWorkCatalog({ quiet });
   if (state.refreshing) return;
   state.refreshing = true;
   if (!quiet) {
@@ -218,6 +233,7 @@ function renderLoadError(error) {
 }
 
 function renderFilters() {
+  if (isWork) return renderWorkFilters();
   const activeRecords = state.entries.filter(({ record }) => !record.deleted_at);
   const statusCounts = Object.fromEntries(state.statuses.map((status) => [status, 0]));
   let trashCount = 0;
@@ -240,6 +256,7 @@ function renderFilters() {
 }
 
 function render() {
+  if (isWork) return renderWork();
   const active = state.entries.filter(({ record }) => !record.deleted_at);
   const statusCounts = countBy(active, ({ record }) => record.status);
   elements.totalCount.textContent = String(active.length);
@@ -318,6 +335,10 @@ function updateSortDirectionControl() {
       asc: "Lowest rated first; unrated entries remain last",
       desc: "Highest rated first; unrated entries remain last",
     },
+    priority: {
+      asc: "Unprioritized works first, then Low and High",
+      desc: "High priority first, then Low and unprioritized works",
+    },
   };
   const description = descriptions[state.sort][direction];
   elements.sortDirection.dataset.direction = direction;
@@ -326,6 +347,7 @@ function updateSortDirectionControl() {
 }
 
 function cardTemplate(entry) {
+  if (isWork) return workCardTemplate(entry);
   const record = entry.record;
   const media = mediaInfo(record.media_type);
   const status = statusInfo(record.status);
@@ -429,10 +451,15 @@ function today() {
 }
 
 function entryById(recordId) {
+  if (isWork && state.sheet.entryId === recordId && state.detailEntry?.record.id === recordId) return state.detailEntry;
   return state.entries.find(({ record }) => record.id === recordId) || null;
 }
 
-function upsertEntry(entry) {
+async function upsertEntry(entry) {
+  if (isWork) {
+    state.detailEntry = entry;
+    return loadWorkCatalog({ quiet: true });
+  }
   const index = state.entries.findIndex(({ record }) => record.id === entry.record.id);
   if (index === -1) {
     const highest = state.entries.reduce((maximum, item) => Math.max(maximum, item.ordinal), -1);
@@ -445,6 +472,7 @@ function upsertEntry(entry) {
 }
 
 function updateSync(sync) {
+  if (isWork) return;
   if (!sync) return;
   state.sync = sync;
   const labels = {
@@ -459,6 +487,7 @@ function updateSync(sync) {
 }
 
 async function acquireEditor() {
+  if (state.editor.releasing) await state.editor.releasing;
   if (state.editor.owned) return true;
   try {
     await request("/api/editor/claim", {
@@ -508,18 +537,20 @@ function stopHeartbeat() {
 }
 
 async function releaseEditor({ keepalive = false } = {}) {
-  if (!state.editor.owned) return;
+  if (!state.editor.owned) return state.editor.releasing;
   stopHeartbeat();
   state.editor.owned = false;
   state.editor.claimed = false;
-  try {
-    await request("/api/editor/release", {
+  const releasing = request("/api/editor/release", {
       method: "POST",
       body: { client_id: clientId, page_id: pageId },
       keepalive,
-    });
-  } catch (_error) {
-    // The lease expires automatically after 15 seconds if release cannot reach the server.
+    }).catch(() => {});
+  state.editor.releasing = releasing;
+  try {
+    await releasing;
+  } finally {
+    if (state.editor.releasing === releasing) state.editor.releasing = null;
   }
 }
 
@@ -565,6 +596,7 @@ function openDetail(recordId) {
 }
 
 function renderDetail(entry) {
+  if (isWork) return renderWorkDetail(entry);
   const record = entry.record;
   const media = mediaInfo(record.media_type);
   const status = statusInfo(record.status);
@@ -613,7 +645,7 @@ function renderDetail(entry) {
 async function openCreate() {
   if (!await acquireEditor()) return;
   openLayer("create");
-  setSheetHeading("New journey", "Add to your radar");
+  setSheetHeading(`New ${itemName}`, "Add to your radar");
   elements.sheetBody.innerHTML = entryFormTemplate(null);
   bindDirtyForm();
 }
@@ -623,19 +655,20 @@ async function openEdit(recordId) {
   const entry = entryById(recordId);
   if (!entry) {
     await releaseEditor();
-    toast("That journey is no longer available.", "error");
+    toast(`That ${itemName} is no longer available.`, "error");
     return;
   }
   state.sheet.mode = "edit";
   state.sheet.entryId = recordId;
   state.sheet.dirty = false;
-  setSheetHeading("Edit journey", entry.record.work_title);
+  setSheetHeading(`Edit ${itemName}`, entry.record.work_title);
   elements.sheetBody.innerHTML = entryFormTemplate(entry.record);
   bindDirtyForm();
   focusFirstInSheet();
 }
 
 function entryFormTemplate(record) {
+  if (isWork) return workFormTemplate(record);
   const isCreate = record === null;
   const selectedMedia = record?.media_type || preferredMediaType();
   const mediaOptions = state.mediaTypes.map((value) => `<option value="${value}"${selectedMedia === value ? " selected" : ""}>${escapeHTML(mediaInfo(value).label)}</option>`).join("");
@@ -710,7 +743,7 @@ async function openTransition(recordId, target) {
   const entry = entryById(recordId);
   if (!entry) {
     await releaseEditor();
-    toast("That journey is no longer available.", "error");
+    toast(`That ${itemName} is no longer available.`, "error");
     return;
   }
   const label = transitionLabel(entry.record.status, target);
@@ -730,8 +763,9 @@ async function openTransition(recordId, target) {
           <input name="on" type="date" required value="${today()}">
           <small>If this predates missing or later milestones, you will be asked before they are aligned to this date.</small>
         </label>` : `<p class="form-note full">The original Started date will be preserved; pausing and resuming do not add lifecycle dates.</p>`}
-        ${terminal ? `<fieldset class="field full fieldset-reset"><legend>Rating <small>(optional)</small></legend>${ratingPicker(null)}</fieldset>` : ""}
-        ${terminal ? `<label class="field full"><span>Final impression</span><textarea name="notes" maxlength="20000" placeholder="How did this journey leave you feeling?">${escapeHTML(entry.record.notes || "")}</textarea></label>` : ""}
+        ${isWork && target === "planned" ? `<label class="field full"><span>Priority <span class="required">*</span></span>${workPrioritySelect(null)}<small>Choose a priority to move this work to Planned.</small></label>` : ""}
+        ${terminal && !isWork ? `<fieldset class="field full fieldset-reset"><legend>Rating <small>(optional)</small></legend>${ratingPicker(null)}</fieldset>` : ""}
+        ${terminal ? `<label class="field full"><span>${isWork ? "Notes" : "Final impression"}</span><textarea name="notes" maxlength="20000" placeholder="Anything you want to remember…">${escapeHTML(entry.record.notes || "")}</textarea></label>` : ""}
       </div>
       <div class="form-actions">
         <button class="${target === "discontinued" ? "danger-button" : target === "paused" ? "secondary-button" : "primary-button"}" type="submit">${label}</button>
@@ -743,6 +777,7 @@ async function openTransition(recordId, target) {
 }
 
 async function openHistoryCorrection(recordId) {
+  if (isWork) return openWorkHistory(recordId);
   if (!await acquireEditor()) return;
   const entry = entryById(recordId);
   if (!entry) {
@@ -806,6 +841,7 @@ function bindDirtyForm() {
 }
 
 async function submitEntryForm(form) {
+  if (isWork) return submitWorkEntry(form);
   if (!state.editor.owned && !await acquireEditor()) return;
   const data = new FormData(form);
   const payload = {
@@ -824,7 +860,7 @@ async function submitEntryForm(form) {
     const response = existing
       ? await request(`/api/entries/${encodeURIComponent(existing.record.id)}`, { method: "PATCH", body: payload, editor: true, etag: existing.etag })
       : await request("/api/entries", { method: "POST", body: payload, editor: true });
-    upsertEntry(response.entry);
+    await upsertEntry(response.entry);
     updateSync(response.sync);
     state.sheet.dirty = false;
     toast(existing ? "Journey updated." : "Journey added to Investigate.", "success");
@@ -840,6 +876,7 @@ async function submitTransition(form) {
   const target = form.dataset.targetStatus;
   const on = data.get("on");
   const payload = { status: target };
+  if (isWork && target === "planned") payload.priority = data.get("priority");
   if (on) {
     payload.on = on;
     const fieldsToAdjust = priorDatesToAlign(entry.record, target, on);
@@ -851,30 +888,30 @@ async function submitTransition(form) {
     }
   }
   if (["completed", "discontinued"].includes(target)) {
-    payload.rating = data.get("rating") || null;
+    if (!isWork) payload.rating = data.get("rating") || null;
     payload.notes = data.get("notes") || null;
   }
   await runMutation(form, async () => {
     const response = await request(`/api/entries/${encodeURIComponent(entry.record.id)}/transition`, {
       method: "POST", body: payload, editor: true, etag: entry.etag,
     });
-    upsertEntry(response.entry);
+    await upsertEntry(response.entry);
     updateSync(response.sync);
     state.sheet.dirty = false;
     renderDetail(response.entry);
     await releaseEditor();
-    toast(`Journey moved to ${statusInfo(target).label}.`, "success");
+    toast(`${isWork ? "Work" : "Journey"} moved to ${statusInfo(target).label}.`, "success");
   });
 }
 
 function transitionLabel(source, target) {
-  if (source === "paused" && target === "ongoing") return "Resume journey";
+  if (source === "paused" && target === "ongoing") return `Resume ${itemName}`;
   return {
     planned: "Move to planned",
-    ongoing: "Start journey",
-    paused: "Pause journey",
-    completed: "Complete journey",
-    discontinued: "Discontinue journey",
+    ongoing: `Start ${itemName}`,
+    paused: `Pause ${itemName}`,
+    completed: `Complete ${itemName}`,
+    discontinued: `Discontinue ${itemName}`,
   }[target] || `Move to ${statusInfo(target).label}`;
 }
 
@@ -885,6 +922,7 @@ function priorDatesToAlign(record, target, on) {
 }
 
 async function submitHistory(form) {
+  if (isWork) return submitWorkHistory(form);
   if (!state.editor.owned && !await acquireEditor()) return;
   const entry = entryById(state.sheet.entryId);
   if (!entry) return;
@@ -899,7 +937,7 @@ async function submitHistory(form) {
     const response = await request(`/api/entries/${encodeURIComponent(entry.record.id)}/history`, {
       method: "PUT", body: payload, editor: true, etag: entry.etag,
     });
-    upsertEntry(response.entry);
+    await upsertEntry(response.entry);
     updateSync(response.sync);
     state.sheet.dirty = false;
     renderDetail(response.entry);
@@ -916,9 +954,9 @@ async function deleteEntry() {
     const response = await request(`/api/entries/${encodeURIComponent(entry.record.id)}`, {
       method: "DELETE", editor: true, etag: entry.etag,
     });
-    upsertEntry(response.entry);
+    await upsertEntry(response.entry);
     updateSync(response.sync);
-    toast("Journey moved to Trash.", "success");
+    toast(`${isWork ? "Work" : "Journey"} moved to Trash.`, "success");
     await closeLayer({ force: true });
   } catch (error) {
     mutationError(error);
@@ -932,9 +970,9 @@ async function restoreEntry() {
     const response = await request(`/api/entries/${encodeURIComponent(entry.record.id)}/restore`, {
       method: "POST", body: {}, editor: true, etag: entry.etag,
     });
-    upsertEntry(response.entry);
+    await upsertEntry(response.entry);
     updateSync(response.sync);
-    toast("Journey restored.", "success");
+    toast(`${isWork ? "Work" : "Journey"} restored.`, "success");
     await closeLayer({ force: true });
   } catch (error) {
     mutationError(error);
@@ -968,6 +1006,10 @@ function mutationError(error) {
 }
 
 async function retrySync() {
+  if (isWork) {
+    openWorkStorage();
+    return;
+  }
   if (state.sync.state === "unavailable") {
     toast(state.sync.message || "Git synchronization is not configured yet.");
     return;
@@ -1010,6 +1052,7 @@ elements.statusFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-status]");
   if (!button) return;
   state.statusFilter = button.dataset.status;
+  if (isWork) return refreshWorkFilters();
   renderFilters();
   render();
 });
@@ -1024,12 +1067,14 @@ elements.mediaFilters.addEventListener("click", (event) => {
 
 elements.search.addEventListener("input", () => {
   state.search = elements.search.value;
+  if (isWork) return queueWorkSearch();
   render();
 });
 
 elements.sort.addEventListener("change", () => {
   state.sort = elements.sort.value;
   updateSortDirectionControl();
+  if (isWork) return refreshWorkFilters();
   render();
 });
 
@@ -1037,6 +1082,7 @@ elements.sortDirection.addEventListener("click", () => {
   const current = state.sortDirections[state.sort];
   state.sortDirections[state.sort] = current === "asc" ? "desc" : "asc";
   updateSortDirectionControl();
+  if (isWork) return refreshWorkFilters();
   render();
 });
 
@@ -1053,6 +1099,7 @@ elements.grid.addEventListener("click", (event) => {
 elements.sheetBody.addEventListener("click", async (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
+  if (isWork && action.startsWith("category-")) return handleCategoryAction(action, event);
   if (action === "edit") await openEdit(state.sheet.entryId);
   if (action === "transition") await openTransition(state.sheet.entryId, event.target.closest("[data-target-status]").dataset.targetStatus);
   if (action === "correct-history") await openHistoryCorrection(state.sheet.entryId);
@@ -1062,6 +1109,7 @@ elements.sheetBody.addEventListener("click", async (event) => {
     if (state.sheet.dirty && !window.confirm("Discard the unsaved changes in this form?")) return;
     const entry = entryById(state.sheet.entryId);
     if (entry) renderDetail(entry);
+    else await closeLayer({ force: true });
     await releaseEditor();
   }
 });
@@ -1072,6 +1120,7 @@ elements.sheetBody.addEventListener("submit", async (event) => {
   if (event.target.id === "entry-form") await submitEntryForm(event.target);
   if (event.target.id === "transition-form") await submitTransition(event.target);
   if (event.target.id === "history-form") await submitHistory(event.target);
+  if (isWork && event.target.id === "category-form") await submitCategory(event.target);
 });
 
 elements.sheetBody.addEventListener("change", (event) => {
@@ -1087,6 +1136,10 @@ elements.clearFilters.addEventListener("click", () => {
   state.mediaFilter = "all";
   state.search = "";
   elements.search.value = "";
+  if (isWork) {
+    state.categoryFilter = state.kindFilter = state.priorityFilter = "all";
+    return refreshWorkFilters();
+  }
   renderFilters();
   render();
 });
@@ -1135,20 +1188,28 @@ window.addEventListener("pagehide", () => {
 
 window.setInterval(async () => {
   try {
-    const payload = await request("/api/state");
+    const payload = await request(isWork ? "/api/work/state" : "/api/state");
+    if (isWork) {
+      elements.syncLabel.textContent = "Local storage";
+      elements.syncButton.dataset.state = "unavailable";
+    }
     updateSync(payload.sync);
     state.editor.claimed = state.editor.owned || Boolean(payload.editor?.claimed);
     if (
       payload.catalog_revision !== state.catalogRevision
       && !state.editor.owned
-      && !["create", "edit", "transition", "history"].includes(state.sheet.mode)
+      && !["create", "edit", "transition", "history", "categories"].includes(state.sheet.mode)
     ) {
       await loadCatalog({ quiet: true });
     }
   } catch (_error) {
-    updateSync({ state: "error", message: "The catalog server could not be reached." });
+    if (isWork) {
+      elements.syncLabel.textContent = "Connection issue";
+      elements.syncButton.dataset.state = "error";
+    } else updateSync({ state: "error", message: "The catalog server could not be reached." });
   }
 }, 10_000);
 
+setupProfile();
 updateSortDirectionControl();
 loadCatalog();

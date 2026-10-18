@@ -5,3 +5,6 @@ __pycache__/
 .catalog.lock
 .catalog.jsonl.*.tmp
 .tmp/
+data/*.sqlite3
+data/*.sqlite3-*
+data/work-backups/

@@ -30,6 +30,11 @@
       </button>
     </header>
 
+    <nav class="profile-switcher" aria-label="Catalog profile">
+      <a href="/?profile=journey" data-profile="journey">Journey</a>
+      <a href="/?profile=work" data-profile="work">Work</a>
+    </nav>
+
     <main class="app-shell">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
@@ -55,6 +60,13 @@
         <div class="filter-row status-filters" id="status-filters" role="group" aria-label="Filter by lifecycle status"></div>
         <div class="filter-row media-filters" id="media-filters" role="group" aria-label="Filter by media type"></div>
 
+        <div class="work-controls" id="work-controls" hidden>
+          <label class="field"><span>Category</span><select id="work-category"><option value="all">All categories</option></select></label>
+          <label class="field"><span>Kind</span><select id="work-kind"><option value="all">Projects &amp; tasks</option><option value="project">Projects</option><option value="task">Tasks</option></select></label>
+          <label class="field"><span>Priority</span><select id="work-priority"><option value="all">All priorities</option><option value="high">High</option><option value="low">Low</option><option value="none">Not yet prioritized</option></select></label>
+          <button class="secondary-button" id="manage-categories" type="button">Categories</button>
+        </div>
+
         <div class="results-toolbar">
           <p id="results-count" aria-live="polite">Loading…</p>
           <div class="sort-control">
@@ -76,6 +88,12 @@
       </section>
 
       <section class="catalog-grid" id="catalog-grid" aria-label="Catalog entries" aria-busy="true"></section>
+
+      <nav class="pagination" id="work-pagination" aria-label="Work pages" hidden>
+        <button class="secondary-button" id="previous-page" type="button">Previous</button>
+        <span id="page-label" aria-live="polite"></span>
+        <button class="secondary-button" id="next-page" type="button">Next</button>
+      </nav>
 
       <section class="empty-state" id="empty-state" hidden>
         <div class="empty-symbol" aria-hidden="true">✦</div>
@@ -109,6 +127,7 @@
 
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
+    <script src="/assets/work.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </body>
 </html>

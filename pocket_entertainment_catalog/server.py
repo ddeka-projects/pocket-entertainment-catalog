@@ -17,12 +17,15 @@ from .git_sync import GitSync
 from .lease import EditorLease
 from .service import CatalogService
 from .storage import CatalogStore
+from .work_service import WorkService
+from .work_storage import WorkStore
 
 
 STATIC_ROUTES = {
     "/": "index.html",
     "/index.html": "index.html",
     "/assets/app.js": "app.js",
+    "/assets/work.js": "work.js",
     "/assets/styles.css": "styles.css",
     "/manifest.webmanifest": "manifest.webmanifest",
     "/icon.svg": "icon.svg",
@@ -41,9 +44,11 @@ class PocketCatalogServer:
         self.lease = EditorLease()
         self.git_sync = GitSync(settings.repository_path, settings.catalog_path)
         self.service = CatalogService(self.store, self.lease, self.git_sync)
+        self.work_store = WorkStore(settings.work_path or settings.catalog_path.parent / "editing.sqlite3")
+        self.work_service = WorkService(self.work_store)
         self.public_host = settings.public_host or _discover_lan_ipv4() or "127.0.0.1"
         allowed_hosts = {settings.host, self.public_host}
-        self.api = CatalogAPI(self.service, allowed_hosts=allowed_hosts)
+        self.api = CatalogAPI(self.service, allowed_hosts=allowed_hosts, work_service=self.work_service)
         self._server = CatalogHTTPServer(
             (settings.host, settings.port),
             self._handler(),
@@ -230,6 +235,7 @@ def run(settings: Settings) -> None:
     server = PocketCatalogServer(settings)
     print(f"Pocket Entertainment Catalog {__version__}")
     print(f"Catalog: {settings.catalog_path}")
+    print(f"Work: {server.work_store.path}")
     print(f"Open: {server.url}")
     try:
         server.serve_forever()

@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -123,6 +124,66 @@ class HTTPApplicationTests(unittest.TestCase):
         status, stale = self.call(path, method="PATCH", payload={"notes": "Stale"}, headers=headers)
         self.assertEqual(412, status)
         self.assertEqual("edit_conflict", stale["error"]["code"])  # type: ignore[index]
+
+    def work_owner(self):
+        self.call("/api/editor/claim", method="POST", payload={"client_id": "work-client", "page_id": "work-page"})
+        return {"X-Catalog-Client": "work-client", "X-Catalog-Page": "work-page"}
+
+    def test_work_starts_empty_and_mutations_are_isolated_from_journey_and_git(self):
+        status, data = self.call("/api/work/catalog")
+        self.assertEqual(200, status)
+        self.assertEqual([], data["entries"])
+        self.assertEqual("Uncategorized", data["categories"][0]["name"])
+        before = self.server.store.path.read_bytes()
+        payload = {"work_title": "Kaleido Star", "kind": "project", "category_id": "uncategorized"}
+        self.assertEqual(400, self.call("/api/work/entries", method="POST", payload=payload)[0])
+        headers = self.work_owner()
+        with patch.object(self.server.git_sync, "record_change") as git_change:
+            status, response = self.call("/api/work/entries", method="POST", payload=payload, headers=headers)
+            self.assertEqual(201, status)
+            entry = response["entry"]
+            route = "/api/work/entries/" + entry["record"]["id"]
+            headers["If-Match"] = entry["etag"]
+            self.assertEqual(400, self.call(route + "/transition", method="POST", payload={"status": "planned"}, headers=headers)[0])
+            status, planned = self.call(route + "/transition", method="POST", payload={"status": "planned", "priority": "high"}, headers=headers)
+            self.assertEqual(200, status)
+            self.assertEqual("high", planned["entry"]["record"]["priority"])
+            self.assertEqual(412, self.call(route, method="PATCH", payload={"notes": "stale"}, headers=headers)[0])
+            git_change.assert_not_called()
+        self.assertEqual(before, self.server.store.path.read_bytes())
+
+    def test_work_categories_require_a_lease_and_current_version(self):
+        path = "/api/work/categories"
+        self.assertEqual(400, self.call(path, method="POST", payload={"name": "Anime"})[0])
+        headers = self.work_owner()
+        status, data = self.call(path, method="POST", payload={"name": "Anime"}, headers=headers)
+        self.assertEqual(201, status)
+        category = next(c for c in data["categories"] if c["name"] == "Anime")
+        self.assertEqual(400, self.call(path, method="POST", payload={"name": " anime "}, headers=headers)[0])
+        route = path + "/" + category["id"]
+        headers["If-Match"] = category["etag"]
+        self.assertEqual(200, self.call(route, method="PATCH", payload={"name": "Animation"}, headers=headers)[0])
+        self.assertEqual(412, self.call(route, method="DELETE", headers=headers)[0])
+        default = data["categories"][0]
+        headers["If-Match"] = default["etag"]
+        self.assertEqual(400, self.call(path + "/uncategorized", method="DELETE", headers=headers)[0])
+
+    def test_work_requests_share_the_origin_checks_and_filter_validation(self):
+        headers = self.work_owner() | {"Origin": "http://untrusted.example"}
+        self.assertEqual(403, self.call("/api/work/entries", method="POST", payload={}, headers=headers)[0])
+        self.assertEqual(400, self.call("/api/work/catalog?page_size=1000")[0])
+        self.assertEqual(400, self.call("/api/work/catalog?status=all&status=planned")[0])
+        self.assertEqual(400, self.call("/api/work/catalog?unknown=value")[0])
+        self.assertEqual(200, self.call("/assets/work.js")[0])
+
+    def test_work_backup_download_is_sqlite(self):
+        with urlopen(self.base + "/api/work/backup", timeout=2) as response:
+            self.assertEqual("application/vnd.sqlite3", response.headers["Content-Type"])
+            self.assertTrue(response.read().startswith(b"SQLite format 3\0"))
+        status, exported = self.call("/api/work/export")
+        self.assertEqual(200, status)
+        self.assertEqual(1, exported["schema_version"])
+        self.assertEqual([], exported["works"])
 
 
 if __name__ == "__main__":

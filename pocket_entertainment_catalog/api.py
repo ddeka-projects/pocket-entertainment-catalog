@@ -7,6 +7,8 @@ import ipaddress
 import json
 import re
 import socket
+from pathlib import Path
+import tempfile
 from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -54,8 +56,10 @@ class CatalogAPI:
         service: CatalogService,
         *,
         allowed_hosts: set[str] | None = None,
+        work_service=None,
     ) -> None:
         self.service = service
+        self.work_service = work_service
         self._allowed_hosts = {
             host.casefold().rstrip(".") for host in (allowed_hosts or set()) if host
         }
@@ -84,6 +88,9 @@ class CatalogAPI:
             self.validate_request(headers, mutating=mutating)
             target_parts = urlsplit(target)
             segments = self._segments(target_parts.path)
+
+            if segments[:2] == ["api", "work"] and self.work_service is not None:
+                return self._work_route(method, segments[2:], target_parts.query, headers, body)
 
             if method == "GET" and segments == ["api", "status"]:
                 return self._json(200, {"server": "available"})
@@ -163,6 +170,75 @@ class CatalogAPI:
             return self._error(404, "not_found", "The requested API route does not exist.")
         except Exception as error:
             return self._exception(error)
+
+    def _work_route(self, method, segments, query, headers, body) -> APIResponse:
+        work = self.work_service
+        if method == "GET" and segments == ["catalog"]:
+            values = parse_qs(query, keep_blank_values=True)
+            if any(len(v) != 1 for v in values.values()):
+                raise RequestError("Work filters must not be repeated.")
+            return self._json(200, work.catalog({k: v[0] for k, v in values.items()}))
+        if method == "GET" and segments == ["state"]:
+            return self._json(200, work.store.state())
+        if method == "GET" and segments == ["categories"]:
+            with work.store.connection() as db:
+                return self._json(200, {"categories": work.store.categories(db)})
+        if method == "GET" and segments == ["backup"]:
+            with tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory) / "editing.sqlite3"
+                work.store.backup(destination)
+                return APIResponse(200, (("Content-Type", "application/vnd.sqlite3"),
+                    ("Content-Disposition", 'attachment; filename="editing-backup.sqlite3"'),
+                    ("Cache-Control", "no-store")), destination.read_bytes())
+        if method == "GET" and segments == ["export"]:
+            return APIResponse(200, (("Content-Type", "application/json; charset=utf-8"),
+                ("Content-Disposition", 'attachment; filename="editing-export.json"'),
+                ("Cache-Control", "no-store")),
+                json.dumps(work.store.export(), ensure_ascii=False, indent=2).encode("utf-8"))
+        if method == "GET" and len(segments) == 2 and segments[0] == "entries":
+            return self._json(200, work.entry(segments[1]))
+        if method not in {"POST", "PATCH", "PUT", "DELETE"}:
+            return self._error(404, "not_found", "The requested Work route does not exist.")
+        self._authorize_editor(headers)
+        if method == "POST" and segments == ["entries"]:
+            return self._json(201, work.create(self._json_body(headers, body)))
+        if segments and segments[0] == "categories":
+            if method == "POST" and len(segments) == 1:
+                payload = self._json_body(headers, body)
+                if set(payload) != {"name"}:
+                    raise RequestError("Category requests require exactly a name.")
+                return self._json(201, work.store.change_category(payload["name"]))
+            if len(segments) == 2 and method in {"PATCH", "DELETE"}:
+                etag = self._required_header(headers, "If-Match")
+                if method == "DELETE":
+                    if body:
+                        raise RequestError("DELETE must not contain a body.")
+                    return self._json(200, work.store.change_category(category_id=segments[1], expected_etag=etag, delete=True))
+                payload = self._json_body(headers, body)
+                if set(payload) != {"name"}:
+                    raise RequestError("Category requests require exactly a name.")
+                return self._json(200, work.store.change_category(payload["name"], category_id=segments[1], expected_etag=etag))
+        if len(segments) >= 2 and segments[0] == "entries":
+            etag = self._required_header(headers, "If-Match")
+            record_id = segments[1]
+            if method == "DELETE" and len(segments) == 2:
+                if body:
+                    raise RequestError("DELETE must not contain a body.")
+                return self._json(200, work.delete(record_id, expected_etag=etag))
+            operation = None
+            if method == "PATCH" and len(segments) == 2:
+                operation = work.update
+            elif method == "POST" and segments[2:] == ["transition"]:
+                operation = work.transition
+            elif method == "PUT" and segments[2:] == ["history"]:
+                operation = work.correct_history
+            elif method == "POST" and segments[2:] == ["restore"]:
+                if self._json_body(headers, body):
+                    raise RequestError("Restore request body must be empty.")
+                return self._json(200, work.restore(record_id, expected_etag=etag))
+            if operation:
+                return self._json(200, operation(record_id, self._json_body(headers, body), expected_etag=etag))
+        return self._error(404, "not_found", "The requested Work route does not exist.")
 
     def validate_peer(self, client_address: str) -> None:
         try:

@@ -210,32 +210,7 @@ def validate_record(record: Mapping[str, Any]) -> dict[str, Any]:
     ):
         raise ModelError("release_year must be a four-digit integer or null.")
 
-    dates = value["dates"]
-    if not isinstance(dates, dict) or set(dates) != set(DATE_FIELDS):
-        raise ModelError("dates must contain exactly the four lifecycle date fields.")
-    parsed_dates: list[date | None] = []
-    for field in DATE_FIELDS:
-        item = dates[field]
-        parsed_dates.append(None if item is None else parse_date(item))
-    known_dates = [item for item in parsed_dates if item is not None]
-    if known_dates != sorted(known_dates):
-        raise ModelError("Lifecycle dates must be chronological when they are known.")
-    if not known_dates:
-        if "import" not in value:
-            raise ModelError("Only legacy imported entries may have all lifecycle dates unknown.")
-    else:
-        missing_dates = [field for field in STATUS_DATE_FIELDS[status] if dates[field] is None]
-        if missing_dates:
-            raise ModelError(
-                "Lifecycle history must include every date through the current status "
-                f"(missing={missing_dates})."
-            )
-    if status == "investigate" and any(dates[field] is not None for field in DATE_FIELDS[1:]):
-        raise ModelError("Investigate entries cannot have later lifecycle dates.")
-    if status == "planned" and (dates["started_on"] is not None or dates["ended_on"] is not None):
-        raise ModelError("Planned entries cannot have started or ended dates.")
-    if status not in TERMINAL_STATUSES and dates["ended_on"] is not None:
-        raise ModelError("Only terminal entries may have an ended date.")
+    validate_lifecycle_dates(value["dates"], status, allow_unknown="import" in value)
 
     notes = value["notes"]
     if notes is not None and (not isinstance(notes, str) or len(notes) > 20_000):
@@ -255,14 +230,7 @@ def validate_record(record: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise ModelError("external_ids keys and values must be non-empty strings.")
 
-    created_at = parse_timestamp(value["created_at"])
-    updated_at = parse_timestamp(value["updated_at"])
-    if updated_at < created_at:
-        raise ModelError("updated_at cannot be earlier than created_at.")
-    if value["deleted_at"] is not None:
-        deleted_at = parse_timestamp(value["deleted_at"])
-        if deleted_at < created_at or updated_at < deleted_at:
-            raise ModelError("deleted_at must fall between created_at and updated_at.")
+    validate_timestamps(value)
 
     if "import" in value:
         import_data = value["import"]
@@ -283,6 +251,45 @@ def validate_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
     return value
 
+
+def validate_lifecycle_dates(dates: Any, status: str, *, allow_unknown: bool = False) -> None:
+    """The same dated lifecycle applies to Journey and Work records."""
+    if not isinstance(dates, dict) or set(dates) != set(DATE_FIELDS):
+        raise ModelError("dates must contain exactly the four lifecycle date fields.")
+    parsed_dates: list[date | None] = []
+    for field in DATE_FIELDS:
+        item = dates[field]
+        parsed_dates.append(None if item is None else parse_date(item))
+    known_dates = [item for item in parsed_dates if item is not None]
+    if known_dates != sorted(known_dates):
+        raise ModelError("Lifecycle dates must be chronological when they are known.")
+    if not known_dates:
+        if not allow_unknown:
+            raise ModelError("Only legacy imported entries may have all lifecycle dates unknown.")
+    else:
+        missing_dates = [field for field in STATUS_DATE_FIELDS[status] if dates[field] is None]
+        if missing_dates:
+            raise ModelError(
+                "Lifecycle history must include every date through the current status "
+                f"(missing={missing_dates})."
+            )
+    if status == "investigate" and any(dates[field] is not None for field in DATE_FIELDS[1:]):
+        raise ModelError("Investigate entries cannot have later lifecycle dates.")
+    if status == "planned" and (dates["started_on"] is not None or dates["ended_on"] is not None):
+        raise ModelError("Planned entries cannot have started or ended dates.")
+    if status not in TERMINAL_STATUSES and dates["ended_on"] is not None:
+        raise ModelError("Only terminal entries may have an ended date.")
+
+
+def validate_timestamps(value: Mapping[str, Any]) -> None:
+    created_at = parse_timestamp(value["created_at"])
+    updated_at = parse_timestamp(value["updated_at"])
+    if updated_at < created_at:
+        raise ModelError("updated_at cannot be earlier than created_at.")
+    if value["deleted_at"] is not None:
+        deleted_at = parse_timestamp(value["deleted_at"])
+        if deleted_at < created_at or updated_at < deleted_at:
+            raise ModelError("deleted_at must fall between created_at and updated_at.")
 
 def validate_catalog(records: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(records, list):

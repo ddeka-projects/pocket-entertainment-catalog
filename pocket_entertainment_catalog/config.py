@@ -18,6 +18,7 @@ class Settings:
     catalog_path: Path
     static_path: Path
     repository_path: Path
+    work_path: Path | None = None
 
 
 def load_settings() -> Settings:
@@ -40,6 +41,10 @@ def load_settings() -> Settings:
     if not catalog_path.is_absolute():
         catalog_path = PROJECT_ROOT / catalog_path
 
+    work_path = Path(setting("POCKET_CATALOG_WORK_DATA", "data/editing.sqlite3"))
+    if not work_path.is_absolute():
+        work_path = PROJECT_ROOT / work_path
+
     return Settings(
         host=host,
         port=port,
@@ -47,6 +52,7 @@ def load_settings() -> Settings:
         catalog_path=catalog_path.resolve(),
         static_path=(Path(__file__).resolve().parent / "static").resolve(),
         repository_path=PROJECT_ROOT.resolve(),
+        work_path=work_path.absolute(),
     )
 
 
