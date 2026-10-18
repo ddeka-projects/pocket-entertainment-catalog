@@ -40,6 +40,42 @@ class WorkTests(unittest.TestCase):
         restarted = WorkService(WorkStore(self.path))
         self.assertEqual(entry, restarted.entry(entry["record"]["id"])["entry"])
 
+    def test_explicit_legacy_creation_selects_status_without_fabricating_dates(self):
+        base = {"work_title": "Old project", "kind": "project", "category_id": "uncategorized"}
+        for status in ("investigate", "planned", "ongoing", "paused", "completed", "discontinued"):
+            priority = None if status == "investigate" else "high"
+            entry = self.service.create_legacy(base | {"status": status, "priority": priority})["entry"]
+            self.assertEqual(status, entry["record"]["status"])
+            self.assertEqual(priority, entry["record"]["priority"])
+            self.assertTrue(entry["record"]["legacy_history"])
+            self.assertEqual(dict.fromkeys(DATE_FIELDS), entry["record"]["dates"])
+        ordinary = self.create()
+        self.assertFalse(ordinary["record"]["legacy_history"])
+        self.assertIsNotNone(ordinary["record"]["dates"]["investigated_on"])
+
+    def test_legacy_creation_enforces_priority_and_server_owned_fields(self):
+        base = {"work_title": "Old task", "kind": "task", "category_id": "uncategorized", "status": "completed", "priority": "low"}
+        for extra in ({"priority": None}, {"priority": "medium"}, {"status": "investigate"}, {"status": "invalid"}):
+            with self.assertRaises(ModelError):
+                self.service.create_legacy(base | extra)
+        for extra in ({"dates": dict.fromkeys(DATE_FIELDS)}, {"legacy_history": True}, {"created_at": "2020-01-01T00:00:00.000Z"}, {"id": "custom"}):
+            with self.assertRaises(InvalidRequest):
+                self.service.create_legacy(base | extra)
+        with self.assertRaises(InvalidRequest):
+            self.service.create_legacy({k: v for k, v in base.items() if k != "status"})
+        with self.assertRaises(InvalidRequest):
+            self.service.create(base)
+        self.assertEqual(0, self.service.catalog({})["total"])
+
+    def test_legacy_ongoing_work_still_needs_sequential_transitions_and_alignment(self):
+        entry = self.service.create_legacy({"work_title": "Old project", "kind": "project", "category_id": "uncategorized", "status": "planned", "priority": "low"})["entry"]
+        with self.assertRaises(InvalidTransition):
+            self.transition(entry, "completed")
+        with self.assertRaises(InvalidTransition):
+            self.transition(entry, "ongoing")
+        ongoing = self.transition(entry, "ongoing", on="2020-02-03", adjust_prior_dates=True)
+        self.assertEqual(["2020-02-03"] * 3 + [None], list(ongoing["record"]["dates"].values()))
+
     def test_duplicates_have_stable_readable_independent_ids(self):
         a, b = self.create(), self.create()
         self.assertNotEqual(a["record"]["id"], b["record"]["id"])

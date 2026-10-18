@@ -24,22 +24,35 @@ class WorkService:
         return self.store.catalog(query) | {"statuses": list(STATUSES)}
 
     def create(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._create(payload, legacy=False)
+
+    def create_legacy(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Explicit historical entry: select its status without inventing dates."""
+        return self._create(payload, legacy=True)
+
+    def _create(self, payload: Mapping[str, Any], *, legacy: bool) -> dict[str, Any]:
+        fields = {"work_title", "unit_title", "kind", "category_id", "release_year", "notes"}
+        required = {"work_title", "kind", "category_id"}
+        if legacy:
+            fields |= {"status", "priority"}
+            required.add("status")
         CatalogService._require_payload(payload,
-            {"work_title", "unit_title", "kind", "category_id", "release_year", "notes"},
-            required={"work_title", "kind", "category_id"})
+            fields, required=required)
         now = utc_timestamp()
         title = CatalogService._required_title(payload["work_title"], "work_title", 300)
         record = {
             "id": new_record_id(title, now), "work_title": title,
             "unit_title": CatalogService._optional_title(payload.get("unit_title"), "unit_title", 200),
             "kind": payload["kind"], "category_id": payload["category_id"],
-            "status": "investigate", "priority": None,
+            "status": payload["status"] if legacy else "investigate",
+            "priority": payload.get("priority") if legacy else None,
             "release_year": CatalogService._release_year(payload.get("release_year")),
             "notes": CatalogService._notes(payload.get("notes")),
             "dates": dict.fromkeys(DATE_FIELDS),
-            "created_at": now, "updated_at": now, "deleted_at": None, "legacy_history": False,
+            "created_at": now, "updated_at": now, "deleted_at": None, "legacy_history": legacy,
         }
-        record["dates"]["investigated_on"] = local_calendar_date()
+        if not legacy:
+            record["dates"]["investigated_on"] = local_calendar_date()
         return self._public(self.store.create(record))
 
     def update(self, record_id: str, payload: Mapping[str, Any], *, expected_etag: str) -> dict[str, Any]:

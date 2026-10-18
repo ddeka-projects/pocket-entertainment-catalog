@@ -175,32 +175,66 @@ function workPrioritySelect(value) {
   return `<select name="priority" required><option value="" disabled${!value ? " selected" : ""}>Choose a priority</option><option value="high"${value === "high" ? " selected" : ""}>High</option><option value="low"${value === "low" ? " selected" : ""}>Low</option></select>`;
 }
 
-function workFormTemplate(record) {
+async function openLegacyCreate() {
+  if (state.sheet.dirty && !window.confirm("Discard the unsaved changes in this form?")) return;
+  if (!await acquireEditor()) return;
+  if (state.sheet.mode === null) openLayer("legacy");
+  else {
+    state.sheet.mode = "legacy";
+    state.sheet.entryId = null;
+    state.sheet.dirty = false;
+  }
+  setSheetHeading("Historical project or task", "Add legacy work");
+  elements.sheetBody.innerHTML = workFormTemplate(null, { legacy: true });
+  applyLegacyStatusRules();
+  bindDirtyForm();
+  focusFirstInSheet();
+}
+
+function applyLegacyStatusRules() {
+  const form = elements.sheetBody.querySelector('#entry-form[data-legacy="true"]');
+  if (!form) return;
+  const investigate = form.elements.status.value === "investigate";
+  form.elements.priority.disabled = investigate;
+  form.elements.priority.required = !investigate;
+  if (investigate) form.elements.priority.value = "";
+}
+
+function workFormTemplate(record, { legacy = false } = {}) {
   const categories = state.categories.map((c) => `<option value="${escapeAttribute(c.id)}"${c.id === (record?.category_id || "uncategorized") ? " selected" : ""}>${escapeHTML(c.name)}</option>`).join("");
-  return `${record ? "" : '<p class="form-note">New works begin in Investigate. Choose a priority when you move to Planned.</p>'}
-    <form id="entry-form"><div class="form-grid">
+  const introduction = legacy
+    ? '<p class="warning-panel">For historical work whose dates are unknown. Choose its existing status; all lifecycle dates will be left blank.</p>'
+    : '<p class="form-note">New works begin in Investigate. Choose a priority when you move to Planned.</p><button class="text-button" type="button" data-action="add-legacy-work">Adding old work? Add legacy work</button>';
+  return `${record ? "" : introduction}
+    <form id="entry-form" data-legacy="${legacy}"><div class="form-grid">
       <label class="field full"><span>Work title <span class="required">*</span></span><input name="work_title" required maxlength="300" autocomplete="off" value="${escapeAttribute(record?.work_title || "")}"></label>
       <label class="field full"><span>Work unit</span><input name="unit_title" maxlength="200" placeholder="Season 1, Launch Trailer, a video name…" value="${escapeAttribute(record?.unit_title || "")}"><small>Optional scope within a title, creator, or account.</small></label>
       <label class="field"><span>Kind</span><select name="kind" required><option value="project">Project</option><option value="task"${record?.kind === "task" ? " selected" : ""}>Task</option></select></label>
       <label class="field"><span>Category</span><select name="category_id" required>${categories}</select><small>Categories are managed separately.</small></label>
-      ${record && record.status !== "investigate" ? `<label class="field"><span>Priority</span>${workPrioritySelect(record.priority)}</label>` : ""}
+      ${legacy ? `<label class="field"><span>Existing status</span><select name="status" required>${state.statuses.map((s) => `<option value="${s}"${s === "completed" ? " selected" : ""}>${statusInfo(s).label}</option>`).join("")}</select></label>` : ""}
+      ${legacy || (record && record.status !== "investigate") ? `<label class="field"><span>Priority</span>${workPrioritySelect(record?.priority || null)}${legacy ? '<small>Investigate has no priority; other statuses require High or Low.</small>' : ""}</label>` : ""}
       <label class="field"><span>Release year</span><input name="release_year" type="number" inputmode="numeric" min="1000" max="9999" placeholder="Optional" value="${record?.release_year ?? ""}"></label>
       <label class="field full"><span>Notes</span><textarea name="notes" maxlength="20000">${escapeHTML(record?.notes || "")}</textarea></label>
-    </div><div class="form-actions"><button class="primary-button" type="submit">${record ? "Save changes" : "Add work"}</button><button class="secondary-button" type="button" data-action="cancel-form">Cancel</button></div></form>`;
+    </div><div class="form-actions"><button class="primary-button" type="submit">${record ? "Save changes" : legacy ? "Add legacy work" : "Add work"}</button><button class="secondary-button" type="button" data-action="cancel-form">Cancel</button></div></form>`;
 }
 
 async function submitWorkEntry(form) {
   if (!state.editor.owned && !await acquireEditor()) return;
   const data = new FormData(form);
   const existing = state.sheet.entryId ? entryById(state.sheet.entryId) : null;
+  const legacy = !existing && form.dataset.legacy === "true";
   const payload = Object.fromEntries(["work_title", "unit_title", "kind", "category_id", "release_year", "notes"].map((f) => [f, data.get(f) || null]));
   if (existing && existing.record.status !== "investigate") payload.priority = data.get("priority");
+  if (legacy) {
+    payload.status = data.get("status");
+    payload.priority = payload.status === "investigate" ? null : data.get("priority");
+  }
   await runMutation(form, async () => {
-    const response = await request(existing ? `/api/entries/${encodeURIComponent(existing.record.id)}` : "/api/entries", {
+    const response = await request(existing ? `/api/entries/${encodeURIComponent(existing.record.id)}` : legacy ? "/api/work/legacy" : "/api/entries", {
       method: existing ? "PATCH" : "POST", body: payload, editor: true, etag: existing?.etag,
     });
     await upsertEntry(response.entry);
-    toast(existing ? "Work updated." : "Work added to Investigate.", "success");
+    toast(existing ? "Work updated." : legacy ? "Legacy work added with unknown dates." : "Work added to Investigate.", "success");
     await closeLayer({ force: true });
   });
 }

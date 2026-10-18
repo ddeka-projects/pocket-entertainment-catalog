@@ -185,6 +185,18 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual(1, exported["schema_version"])
         self.assertEqual([], exported["works"])
 
+    def test_explicit_legacy_route_requires_ownership_and_keeps_normal_creation_strict(self):
+        payload = {"work_title": "Historical anime", "kind": "project", "category_id": "uncategorized", "status": "completed", "priority": "high"}
+        self.assertEqual(400, self.call("/api/work/legacy", method="POST", payload=payload)[0])
+        headers = self.work_owner()
+        self.assertEqual(400, self.call("/api/work/entries", method="POST", payload=payload, headers=headers)[0])
+        status, saved = self.call("/api/work/legacy", method="POST", payload=payload, headers=headers)
+        self.assertEqual(201, status)
+        self.assertEqual("completed", saved["entry"]["record"]["status"])
+        self.assertTrue(saved["entry"]["record"]["legacy_history"])
+        self.assertTrue(all(v is None for v in saved["entry"]["record"]["dates"].values()))
+        self.assertEqual(400, self.call("/api/work/legacy", method="POST", payload=payload | {"priority": None}, headers=headers)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

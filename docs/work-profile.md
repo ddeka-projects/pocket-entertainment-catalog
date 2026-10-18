@@ -25,7 +25,7 @@ The `metadata` revision counter is advanced by triggers for all work/category in
 | `notes` | Optional text, up to 20,000 characters. |
 | `dates` | Four nullable `YYYY-MM-DD` milestones: `investigated_on`, `planned_on`, `started_on`, `ended_on`. Flattened into columns in SQLite. |
 | `created_at`, `updated_at`, `deleted_at` | Server-owned UTC timestamps with milliseconds; deletion is soft. |
-| `legacy_history` | Server/import-owned boolean. False for all normal creations. Permits entirely unknown dates in a future deliberate backfill. Not editable via HTTP. |
+| `legacy_history` | Server-owned boolean. False for normal creations; true for the explicit legacy-creation route. Permits entirely unknown historical dates. Cannot be assigned or edited in request bodies. |
 
 Title/category/unit combinations are deliberately **not unique**: another editing effort gets another ID. SQLite also maintains an internal monotonic `sequence` for stable work ordering.
 
@@ -49,6 +49,7 @@ All routes use the existing trusted-LAN, Host, same-origin, and JSON-body polici
 | `GET /api/work/state` | Lightweight revision. |
 | `GET /api/work/entries/{id}` | One work and ETag, including soft-deleted works. |
 | `POST /api/work/entries` | Create an Investigate work with today's local calendar date. |
+| `POST /api/work/legacy` | Explicit historical creation: normal creation fields plus required `status` and valid `priority`. The server marks the record as legacy and sets all four dates null. Uses the same editor lease. |
 | `PATCH /api/work/entries/{id}` | Edit details and valid priority. |
 | `POST /api/work/entries/{id}/transition` | Sequential status change, date, optional notes, and required priority when planning. |
 | `PUT /api/work/entries/{id}/history` | Correct `dates` for the existing status. |
@@ -65,4 +66,4 @@ Catalog query parameters are `status` (`all`/`trash`/lifecycle), `category` (ID 
 
 ## Backups
 
-Database writes do not invoke Git. Once per local day, after a successful write, a consistent snapshot is saved beside the configured database under `work-backups/<database-stem>-YYYY-MM-DD.sqlite3`; the latest seven snapshots for that stem are retained. Further writes that day leave that snapshot intact. A failed automatic backup is logged without misreporting an already committed work save. Download backup creates a fresh snapshot on demand. Export is for inspection and future backfill tooling; no HTTP import is provided yet.
+Database writes do not invoke Git. Once per local day, after a successful write, a consistent snapshot is saved beside the configured database under `work-backups/<database-stem>-YYYY-MM-DD.sqlite3`; the latest seven snapshots for that stem are retained. Further writes that day leave that snapshot intact. A failed automatic backup is logged without misreporting an already committed work save. Download backup creates a fresh snapshot on demand. Export is for inspection and future backfill tooling. Legacy records can be added individually through the dedicated route; there is no bulk import endpoint.

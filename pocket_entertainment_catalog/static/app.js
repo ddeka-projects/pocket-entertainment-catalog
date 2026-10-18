@@ -1100,6 +1100,7 @@ elements.sheetBody.addEventListener("click", async (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
   if (isWork && action.startsWith("category-")) return handleCategoryAction(action, event);
+  if (isWork && action === "add-legacy-work") return openLegacyCreate();
   if (action === "edit") await openEdit(state.sheet.entryId);
   if (action === "transition") await openTransition(state.sheet.entryId, event.target.closest("[data-target-status]").dataset.targetStatus);
   if (action === "correct-history") await openHistoryCorrection(state.sheet.entryId);
@@ -1124,6 +1125,7 @@ elements.sheetBody.addEventListener("submit", async (event) => {
 });
 
 elements.sheetBody.addEventListener("change", (event) => {
+  if (isWork && event.target.matches('#entry-form[data-legacy="true"] [name=status]')) applyLegacyStatusRules();
   if (event.target.matches("#history-form [name=status]")) applyHistoryStatusRules();
 });
 
@@ -1198,7 +1200,7 @@ window.setInterval(async () => {
     if (
       payload.catalog_revision !== state.catalogRevision
       && !state.editor.owned
-      && !["create", "edit", "transition", "history", "categories"].includes(state.sheet.mode)
+      && !["create", "legacy", "edit", "transition", "history", "categories"].includes(state.sheet.mode)
     ) {
       await loadCatalog({ quiet: true });
     }

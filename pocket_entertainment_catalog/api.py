@@ -202,6 +202,8 @@ class CatalogAPI:
         self._authorize_editor(headers)
         if method == "POST" and segments == ["entries"]:
             return self._json(201, work.create(self._json_body(headers, body)))
+        if method == "POST" and segments == ["legacy"]:
+            return self._json(201, work.create_legacy(self._json_body(headers, body)))
         if segments and segments[0] == "categories":
             if method == "POST" and len(segments) == 1:
                 payload = self._json_body(headers, body)

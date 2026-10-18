@@ -14,7 +14,9 @@ Works follow `Investigate → Planned → Ongoing ⇄ Paused → Completed / Dis
 
 Use **Categories** to create, rename, or delete categories. Names are unique after Unicode, whitespace, and case normalization. Work forms only select existing categories. Uncategorized is the default and cannot be renamed or deleted. Deleting another category atomically moves its works, including Trash, to Uncategorized.
 
-Lifecycle dates use Journey's chronology and backdating confirmation rules. **Correct dates** adjusts milestones for the current status without bypassing sequential transitions. Normal records cannot erase their entire lifecycle history. The storage model supports explicitly marked legacy records with all dates unknown for a later backfill; this release does not import historical data.
+Lifecycle dates use Journey's chronology and backdating confirmation rules. **Correct dates** adjusts milestones for the current status without bypassing sequential transitions. Normal records cannot erase their entire lifecycle history.
+
+To enter historical work yourself, open **Add work → Adding old work? Add legacy work**. Select its existing status and a High/Low priority (except Investigate, which has no priority). All four lifecycle dates are saved as unknown, with the record explicitly marked as legacy. You can fill dates later using **Correct dates**. Ordinary new works still start in Investigate with today's date and progress sequentially; a legacy work's subsequent transitions also follow that progression. Bulk spreadsheet import is not provided.
 
 Work searches, filters (status, category, kind, priority), sorting, and 48-record pagination run on the server. Work shares the single-editor lease and stale-record safeguards with Journey. Reads remain available to other devices.
 

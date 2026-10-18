@@ -59,6 +59,21 @@
   const priority = workPrioritySelect(null);
   check(priority.includes("required") && priority.includes('value="" disabled selected'), "Planning has no default priority");
 
+  const legacyForm = workFormTemplate(null, { legacy: true });
+  check(legacyForm.includes('data-legacy="true"') && legacyForm.includes('name="status"'), "Legacy creation explicitly selects an existing status");
+  check(legacyForm.includes('name="priority"') && !legacyForm.includes('type="date"'), "Legacy form requires priority without dates");
+  check(form.includes('data-action="add-legacy-work"') && !form.includes('name="status"'), "Ordinary creation offers a separate legacy flow");
+  const legacyNode = mockNode('#entry-form[data-legacy="true"]');
+  legacyNode.elements = { status: { value: "investigate" }, priority: { value: "high" } };
+  const savedQuery = elements.sheetBody.querySelector;
+  elements.sheetBody.querySelector = () => legacyNode;
+  applyLegacyStatusRules();
+  check(legacyNode.elements.priority.disabled && !legacyNode.elements.priority.required && legacyNode.elements.priority.value === "", "Investigate clears and disables legacy priority");
+  legacyNode.elements.status.value = "completed";
+  applyLegacyStatusRules();
+  check(!legacyNode.elements.priority.disabled && legacyNode.elements.priority.required, "Other legacy statuses require a priority");
+  elements.sheetBody.querySelector = savedQuery;
+
   if (typeof print === "function") print("Frontend checks passed");
   else console.log("Frontend checks passed");
 })().catch(error => {
