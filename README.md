@@ -38,7 +38,7 @@ The default port is `8766`. If macOS asks whether Python may accept incoming con
 
 ## Windows scheduled startup
 
-The Windows launcher and Task Scheduler scripts live under `scripts`. The recommended mode starts the server when your Windows user signs in. This lets the application use the same Git author configuration and GitHub credentials that work in your normal terminal.
+The Windows launcher and Task Scheduler scripts live under `scripts`. The server starts when your Windows user signs in, under that account with limited privileges. This lets the application use the same Git author configuration and GitHub credentials that work in your normal terminal. The PC must be signed in and awake for other devices to connect.
 
 First, confirm the launcher works from PowerShell in the project folder:
 
@@ -52,7 +52,7 @@ Stop it with `Ctrl+C`, then install and immediately start the scheduled task:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 ```
 
-The task is named `Pocket Entertainment Catalog`. It starts at user logon without opening a terminal, ignores duplicate starts, and retries up to three times when the server exits with an error. Logs are appended to:
+The task is named `Pocket Entertainment Catalog`. It starts at user logon without opening a terminal, ignores duplicate starts, has no runtime limit, and retries up to three times when the server exits with an error. Logs are appended to:
 
 ```text
 .tmp\server.log
@@ -66,15 +66,9 @@ POCKET_CATALOG_PYTHON=C:\Python313\python.exe
 
 Use a stable Python installation path; the scripts require Python 3.10 or newer. The scheduled task uses the console-free `pythonw.exe` installed beside the configured `python.exe`.
 
-For a true machine-boot task that runs before anyone signs in, open PowerShell as Administrator and install the alternative mode:
+After updating the code or `.env`, finish active saves and rerun the installer to restart the server.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1 -Mode SystemStartup
-```
-
-`SystemStartup` runs as Windows `SYSTEM`. It can serve and save the local catalog, but it normally cannot access your personal Git author configuration or GitHub credentials. Automatic commits or pushes will therefore report a sync issue unless Git is separately configured for that machine account. `UserLogon` is the recommended mode when GitHub synchronization matters.
-
-Changing modes replaces the existing task. To stop and remove either version:
+To stop and remove automatic startup:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1

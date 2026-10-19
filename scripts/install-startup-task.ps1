@@ -1,7 +1,4 @@
-param(
-    [ValidateSet("UserLogon", "SystemStartup")]
-    [string]$Mode = "UserLogon"
-)
+param()
 
 $ErrorActionPreference = "Stop"
 
@@ -10,10 +7,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $BackgroundRunner = Join-Path $PSScriptRoot "run-server-background.pyw"
 $RuntimeHelpers = Join-Path $PSScriptRoot "python-runtime.ps1"
 $CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-$CurrentPrincipal = New-Object System.Security.Principal.WindowsPrincipal($CurrentIdentity)
-$IsAdministrator = $CurrentPrincipal.IsInRole(
-    [System.Security.Principal.WindowsBuiltInRole]::Administrator
-)
 
 if (-not (Test-Path -LiteralPath $BackgroundRunner -PathType Leaf)) {
     throw "Could not find the background server launcher: $BackgroundRunner"
@@ -34,26 +27,12 @@ $Action = New-ScheduledTaskAction `
     -Argument "-B `"$BackgroundRunner`"" `
     -WorkingDirectory $Root
 
-if ($Mode -eq "SystemStartup") {
-    if (-not $IsAdministrator) {
-        throw "Run PowerShell as Administrator to install a pre-login SystemStartup task."
-    }
-
-    $Trigger = New-ScheduledTaskTrigger -AtStartup
-    $Principal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" `
-        -LogonType ServiceAccount `
-        -RunLevel Highest
-    $Description = "Runs Pocket Entertainment Catalog as SYSTEM when Windows starts."
-}
-else {
-    $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentIdentity.Name
-    $Principal = New-ScheduledTaskPrincipal `
-        -UserId $CurrentIdentity.Name `
-        -LogonType Interactive `
-        -RunLevel Limited
-    $Description = "Runs Pocket Entertainment Catalog when $($CurrentIdentity.Name) signs in."
-}
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentIdentity.Name
+$Principal = New-ScheduledTaskPrincipal `
+    -UserId $CurrentIdentity.Name `
+    -LogonType Interactive `
+    -RunLevel Limited
+$Description = "Runs Pocket Entertainment Catalog when $($CurrentIdentity.Name) signs in."
 
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -61,10 +40,26 @@ $Settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -StartWhenAvailable
+    -StartWhenAvailable `
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
+
+# Stop the previous instance, including an older SYSTEM registration, before
+# replacing it so the newly configured account can bind the server port.
+$Task = Get-ScheduledTask -TaskName $TaskName -TaskPath "\" -ErrorAction SilentlyContinue
+if ($Task) {
+    Stop-ScheduledTask -TaskName $TaskName -TaskPath "\"
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $Task = Get-ScheduledTask -TaskName $TaskName -TaskPath "\"
+        if ($Task.State -notin @("Running", "Queued")) { break }
+        if ((Get-Date) -ge $deadline) { throw "Timed out stopping '$TaskName'. No replacement server was started." }
+        Start-Sleep -Milliseconds 250
+    } while ($true)
+}
 
 Register-ScheduledTask `
     -TaskName $TaskName `
+    -TaskPath "\" `
     -Action $Action `
     -Trigger $Trigger `
     -Principal $Principal `
@@ -72,17 +67,10 @@ Register-ScheduledTask `
     -Description $Description `
     -Force | Out-Null
 
-Start-ScheduledTask -TaskName $TaskName
+Start-ScheduledTask -TaskName $TaskName -TaskPath "\"
 
 Write-Host "Installed and started scheduled task: $TaskName"
-Write-Host "Mode: $Mode"
 Write-Host "Background Python: $Pythonw"
-if ($Mode -eq "UserLogon") {
-    Write-Host "The server will start whenever $($CurrentIdentity.Name) signs in."
-    Write-Host "This mode preserves that user's Git identity and GitHub credentials."
-}
-else {
-    Write-Warning "SYSTEM cannot normally use your personal Git identity or GitHub credentials."
-    Write-Warning "Catalog saves will remain local if Git commit or push authentication is unavailable."
-}
+Write-Host "The server will start whenever $($CurrentIdentity.Name) signs in, with limited privileges."
+Write-Host "This preserves that user's Git identity and GitHub credentials."
 Write-Host "Log: $(Join-Path $Root '.tmp\server.log')"
