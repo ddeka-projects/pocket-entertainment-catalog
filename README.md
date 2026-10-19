@@ -46,11 +46,19 @@ First, confirm the launcher works from PowerShell in the project folder:
 powershell -ExecutionPolicy Bypass -File .\scripts\run-server.ps1
 ```
 
-Stop it with `Ctrl+C`, then install and immediately start the scheduled task:
+Stop it with `Ctrl+C`, then install and immediately start the scheduled task from ordinary PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 ```
+
+For first-time phone access or after changing the port, run from **PowerShell as Administrator using the same Windows account**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1 -ConfigureFirewall
+```
+
+This allows the configured TCP port only from `LocalSubnet` on the **Private** firewall profile. Without `-ConfigureFirewall`, the installer leaves firewall rules untouched. The server always runs with limited privileges.
 
 The task is named `Pocket Entertainment Catalog`. It starts at user logon without opening a terminal, ignores duplicate starts, has no runtime limit, and retries up to three times when the server exits with an error. Logs are appended to:
 
@@ -72,9 +80,13 @@ To stop and remove automatic startup:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1
+# Optional, from elevated PowerShell: also remove this app's firewall rule.
+powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1 -RemoveFirewall
 ```
 
-If the task exists but the phone cannot connect, allow the `pythonw.exe` path printed by the installer through Windows Defender Firewall on **Private** networks and confirm that the phone and PC are on the same network. Use the PC's LAN address, such as `http://192.168.1.20:8766/`, rather than `localhost` on the phone.
+Removal leaves firewall rules in place unless `-RemoveFirewall` is supplied. Catalog and Work data are retained.
+
+If the task exists but the phone cannot connect, confirm the PC's network is **Private**, configure the firewall with `-ConfigureFirewall`, and check that the phone and PC are on the same network. Use the PC's LAN address, such as `http://192.168.1.20:8766/`, rather than `localhost` on the phone.
 
 ## What the first version supports
 
