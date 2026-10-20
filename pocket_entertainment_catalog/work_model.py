@@ -12,8 +12,19 @@ UNCATEGORIZED = "uncategorized"
 KINDS = ("project", "task")
 PRIORITIES = ("high", "low")
 FIELDS = {
-    "id", "work_title", "unit_title", "kind", "category_id", "status", "priority",
-    "release_year", "notes", "dates", "created_at", "updated_at", "deleted_at",
+    "id",
+    "work_title",
+    "unit_title",
+    "kind",
+    "category_id",
+    "status",
+    "priority",
+    "release_year",
+    "notes",
+    "dates",
+    "created_at",
+    "updated_at",
+    "deleted_at",
     "legacy_history",
 }
 
@@ -39,8 +50,13 @@ def validate_work(record: Mapping[str, Any]) -> dict[str, Any]:
         item = value[field]
         if optional and item is None:
             continue
-        if (not isinstance(item, str) or not item.strip() or item != item.strip()
-                or len(item) > maximum or any(c in item for c in "\r\n\t")):
+        if (
+            not isinstance(item, str)
+            or not item.strip()
+            or item != item.strip()
+            or len(item) > maximum
+            or any(c in item for c in "\r\n\t")
+        ):
             raise ModelError(f"{field} must be trimmed single-line text.")
     if value["kind"] not in KINDS:
         raise ModelError("kind must be project or task.")
@@ -54,9 +70,13 @@ def validate_work(record: Mapping[str, Any]) -> dict[str, Any]:
     elif value["priority"] not in PRIORITIES:
         raise ModelError("Choose High or Low priority before leaving Investigate.")
     year = value["release_year"]
-    if year is not None and (isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999):
+    if year is not None and (
+        isinstance(year, bool) or not isinstance(year, int) or not 1000 <= year <= 9999
+    ):
         raise ModelError("release_year must be a four-digit integer or null.")
-    if value["notes"] is not None and (not isinstance(value["notes"], str) or len(value["notes"]) > 20_000):
+    if value["notes"] is not None and (
+        not isinstance(value["notes"], str) or len(value["notes"]) > 20_000
+    ):
         raise ModelError("notes must contain at most 20,000 characters.")
     if not isinstance(value["legacy_history"], bool):
         raise ModelError("legacy_history must be a boolean.")

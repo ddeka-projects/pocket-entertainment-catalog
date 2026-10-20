@@ -1,10 +1,10 @@
-# Initial application design
+# Application design
 
 ## Product shape
 
 This is a personal pocket catalog, not a general-purpose media database. The primary object is a **journey unit** chosen by the user: for example, a television season, a split cour, a special finale, a game, or a meaningful live-service segment. Unit titles stay deliberately flexible and editable.
 
-The initial interface is mobile-first and uses the same application on a phone and desktop. It emphasizes quick browsing and lifecycle progress while keeping database mechanics out of the normal flow.
+The interface is mobile-first and uses the same application on a phone and desktop. It emphasizes quick browsing and lifecycle progress while keeping database mechanics out of the normal flow.
 
 ## Information architecture
 
@@ -17,30 +17,29 @@ The catalog screen has four layers:
 
 On a phone, details open as a bottom sheet. On a larger screen, the same sheet becomes a right-side panel, preserving a single interaction model across devices.
 
-## Editing model
+## Browser control and server lifecycle
 
-Normal browsing is always read-only and does not participate in lease ownership.
+One page controls the whole app, including browsing. The first page claims control; another page explicitly chooses **Take Control**. Each accepted claim gets a random server token. Every data request supplies `X-Page-Id` and `X-Controller-Token`. Unauthorized reads and writes are rejected; public assets and `/health` remain available for startup.
 
-```text
-Any readers ────────────────> GET catalog / details
-
-Page A ── claim lease ─────> add, edit, transition, delete, restore
-Page B ── claim while held ─> 423: keep browsing, try again shortly
-Page A ── close / timeout ──> lease becomes available
-```
-
-The lease is intentionally short-lived and in memory:
-
-- heartbeat every 5 seconds;
-- expiry after 15 seconds;
-- best-effort release when the page closes;
-- identity consists of a session client ID and a unique page ID, so two tabs still contend correctly.
-
-The lease controls the user experience, while three lower-level safeguards protect the data itself:
+`POST /api/controller/claim` and `/takeover` accept `{page_id}`; `/release` accepts `{page_id, token}`. Control never expires. No heartbeat or ownership polling is used. A single operation guard serializes takeover with complete protected requests, so a save finishes before control transfers. Ownership is separate from the safeguards for persisted data:
 
 - **ETag / `If-Match`** rejects stale record edits;
 - **cross-process file lock** serializes writers;
-- **disk digest check + atomic replace** detects external edits and prevents partial JSONL writes.
+- **disk digest check + atomic replace** detects external changes and prevents partial JSONL writes;
+- **SQLite transactions and snapshots** protect local Work records;
+- **lifetime process guards** reserve both Journey and Work paths for one running server, even across different ports.
+
+The operating system releases server guards after normal exit or a crash. Scheduled startup uses console-free Python; foreground startup remains available for troubleshooting. Application and startup errors go to `logs/server.log`, rotating at 5 MiB with three backups.
+
+Equivalent operating concerns use the same small modules as the sibling repositories: `app.py`, `config.py`, `controller.py`, `env.py`, `errors.py`, `logging_setup.py`, `health.py`, and `process_lock.py`. HTTP remains standard-library based; this app needs no web framework dependency.
+
+## Configuration and module roles
+
+`__main__.py` delegates to `app.py`, which configures logging, loads `Settings` through `load_settings(env_file=None, *, environ=None)`, and starts `server.py`. `api.py` handles HTTP policy and serialization; `service.py` and `work_service.py` coordinate domain operations; `storage.py` and `work_storage.py` preserve the independent Journey and Work stores. Browser assets live in `static/` and use `/static/` URLs.
+
+The current settings are in [`.env.example`](../.env.example), using the `POCKET_ENTERTAINMENT_CATALOG_` prefix. `.env` values are literal UTF-8, with an optional BOM and matching quotes; real environment values override the file. Duplicate assignments and malformed quoting are rejected. Relative data paths start at the repository root, independent of the launcher's current directory. Journey and Work cannot point to the same file.
+
+`/health` returns the package name and current process identity. Installation and restart scripts require a fresh instance, preventing an old or unrelated listener from being accepted as a successful restart.
 
 ## Lifecycle behavior
 
@@ -75,7 +74,7 @@ All supplied values except server-owned technical fields remain editable.
 
 The JSONL is the source of truth. Records retain stable file order, which also preserves the old-to-new ordering of the historical import; newly created records append to the end.
 
-After each safe local save, the server commits just the catalog file and queues a background push. Readers can see the new local state immediately and are not held up by the network. Failed pushes remain explicit and retryable. The server never automatically merges or force-pushes divergent history.
+After each safe local save, the server commits just the catalog file and queues a background push. The controlling page sees the saved local state without waiting for the network. Failed pushes remain explicit and retryable. The server never automatically merges or force-pushes divergent history.
 
 ## Trust boundary
 
@@ -95,6 +94,6 @@ There is intentionally no account or password layer in this version. Adding remo
 - Cover art and third-party metadata providers.
 - Rewatch/replay history, because it is not part of the stated use case.
 - Manual list ranking for Planned and Investigate.
-- Remote multi-writer merging. The chosen model is one canonical running server with many browser clients.
+- Remote multi-writer merging. The chosen model is one canonical running server with one controlling browser page.
 
-The visual design is an initial baseline: warm dark surfaces, subtle category colors, large readable titles, and restrained controls. It is meant to be iterated from actual phone and desktop use rather than treated as final.
+The visual design uses warm dark surfaces, subtle category colors, large readable titles, and restrained controls. It is meant to be iterated from actual phone and desktop use rather than treated as final.

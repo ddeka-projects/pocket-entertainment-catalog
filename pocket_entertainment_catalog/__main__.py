@@ -1,9 +1,7 @@
-"""Run the Pocket Entertainment Catalog server."""
+"""Run Pocket Entertainment Catalog."""
 
-from .config import load_settings
-from .server import run
+from .app import main
 
 
 if __name__ == "__main__":
-    run(load_settings())
-
+    raise SystemExit(main())

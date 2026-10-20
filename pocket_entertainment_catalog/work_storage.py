@@ -68,8 +68,20 @@ CREATE INDEX works_updated ON works(updated_at);
 PRAGMA user_version = 1;
 """
 WORK_COLUMNS = (
-    "id", "work_title", "unit_title", "kind", "category_id", "status", "priority",
-    "release_year", "notes", *DATE_FIELDS, "created_at", "updated_at", "deleted_at", "legacy_history",
+    "id",
+    "work_title",
+    "unit_title",
+    "kind",
+    "category_id",
+    "status",
+    "priority",
+    "release_year",
+    "notes",
+    *DATE_FIELDS,
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "legacy_history",
 )
 
 
@@ -89,10 +101,15 @@ class WorkStore:
                 triggers = "".join(
                     f"CREATE TRIGGER revision_{table}_{action} AFTER {action} ON {table} "
                     "BEGIN UPDATE metadata SET revision = revision + 1; END;\n"
-                    for table in ("works", "categories") for action in ("INSERT", "UPDATE", "DELETE")
+                    for table in ("works", "categories")
+                    for action in ("INSERT", "UPDATE", "DELETE")
                 )
-                db.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + triggers
-                                 + "INSERT INTO categories VALUES ('uncategorized','Uncategorized','uncategorized');")
+                db.executescript(
+                    "BEGIN IMMEDIATE;\n"
+                    + SCHEMA
+                    + triggers
+                    + "INSERT INTO categories VALUES ('uncategorized','Uncategorized','uncategorized');"
+                )
             elif version != 1:
                 raise StorageError("Unsupported Work database version.")
         self._ready = True
@@ -161,37 +178,58 @@ class WorkStore:
         record = validate_work(record)
         with self.connection(write=True) as db:
             self._require_category(db, record["category_id"])
-            db.execute(f"INSERT INTO works ({','.join(WORK_COLUMNS)}) VALUES ({','.join('?' for _ in WORK_COLUMNS)})",
-                       self._values(record))
+            db.execute(
+                f"INSERT INTO works ({','.join(WORK_COLUMNS)}) VALUES ({','.join('?' for _ in WORK_COLUMNS)})",
+                self._values(record),
+            )
             return self._get(db, record["id"])
 
-    def mutate(self, record_id: str, expected_etag: str,
-               operation: Callable[[dict[str, Any]], dict[str, Any]]) -> StoredRecord:
+    def mutate(
+        self,
+        record_id: str,
+        expected_etag: str,
+        operation: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> StoredRecord:
         with self.connection(write=True) as db:
             current = self._get(db, record_id)
             if current.etag != expected_etag:
-                raise CatalogConflict("This work changed after it was opened. Reload before saving.")
+                raise CatalogConflict(
+                    "This work changed after it was opened. Reload before saving."
+                )
             updated = validate_work(operation(deepcopy(current.value)))
             self._require_category(db, updated["category_id"])
             if updated != current.value:
-                db.execute(f"UPDATE works SET {','.join(c + ' = ?' for c in WORK_COLUMNS)} WHERE id = ?",
-                           [*self._values(updated), record_id])
+                db.execute(
+                    f"UPDATE works SET {','.join(c + ' = ?' for c in WORK_COLUMNS)} WHERE id = ?",
+                    [*self._values(updated), record_id],
+                )
             return self._get(db, record_id)
 
     @staticmethod
     def categories(db: sqlite3.Connection) -> list[dict[str, Any]]:
-        return [dict(row) | {"etag": record_etag({"id": row["id"], "name": row["name"]})}
-                for row in db.execute(
-                    "SELECT c.id, c.name, COUNT(w.id) AS work_count FROM categories c "
-                    "LEFT JOIN works w ON w.category_id = c.id GROUP BY c.id "
-                    "ORDER BY c.id <> 'uncategorized', c.name_key, c.id")]
+        return [
+            dict(row) | {"etag": record_etag({"id": row["id"], "name": row["name"]})}
+            for row in db.execute(
+                "SELECT c.id, c.name, COUNT(w.id) AS work_count FROM categories c "
+                "LEFT JOIN works w ON w.category_id = c.id GROUP BY c.id "
+                "ORDER BY c.id <> 'uncategorized', c.name_key, c.id"
+            )
+        ]
 
-    def change_category(self, name: Any = None, *, category_id: str | None = None,
-                        expected_etag: str | None = None, delete: bool = False) -> dict[str, Any]:
+    def change_category(
+        self,
+        name: Any = None,
+        *,
+        category_id: str | None = None,
+        expected_etag: str | None = None,
+        delete: bool = False,
+    ) -> dict[str, Any]:
         normalized = None if delete else category_name(name)
         with self.connection(write=True) as db:
             if category_id is not None:
-                row = db.execute("SELECT id,name FROM categories WHERE id = ?", (category_id,)).fetchone()
+                row = db.execute(
+                    "SELECT id,name FROM categories WHERE id = ?", (category_id,)
+                ).fetchone()
                 if row is None:
                     raise CatalogNotFound("This category does not exist.")
                 if category_id == UNCATEGORIZED:
@@ -199,28 +237,48 @@ class WorkStore:
                 if record_etag(dict(row)) != expected_etag:
                     raise CatalogConflict("This category changed. Reopen Categories before saving.")
             if delete:
-                for row in db.execute("SELECT id,updated_at FROM works WHERE category_id = ?", (category_id,)).fetchall():
-                    db.execute("UPDATE works SET category_id = ?, updated_at = ? WHERE id = ?",
-                               (UNCATEGORIZED, utc_timestamp(after=row["updated_at"]), row["id"]))
+                for row in db.execute(
+                    "SELECT id,updated_at FROM works WHERE category_id = ?", (category_id,)
+                ).fetchall():
+                    db.execute(
+                        "UPDATE works SET category_id = ?, updated_at = ? WHERE id = ?",
+                        (UNCATEGORIZED, utc_timestamp(after=row["updated_at"]), row["id"]),
+                    )
                 db.execute("DELETE FROM categories WHERE id = ?", (category_id,))
             else:
                 display, key = normalized
-                duplicate = db.execute("SELECT id FROM categories WHERE name_key = ?", (key,)).fetchone()
+                duplicate = db.execute(
+                    "SELECT id FROM categories WHERE name_key = ?", (key,)
+                ).fetchone()
                 if duplicate is not None and duplicate["id"] != category_id:
                     raise InvalidRequest("A category with that name already exists.")
                 if category_id is None:
                     category_id = new_record_id(display, utc_timestamp())
                     db.execute("INSERT INTO categories VALUES (?,?,?)", (category_id, display, key))
                 else:
-                    db.execute("UPDATE categories SET name = ?, name_key = ? WHERE id = ?", (display, key, category_id))
+                    db.execute(
+                        "UPDATE categories SET name = ?, name_key = ? WHERE id = ?",
+                        (display, key, category_id),
+                    )
             return {"categories": self.categories(db), "catalog_revision": self.revision(db)}
 
     def catalog(self, query: dict[str, str]) -> dict[str, Any]:
-        allowed = {"status", "category", "kind", "priority", "search", "sort", "direction", "page", "page_size"}
+        allowed = {
+            "status",
+            "category",
+            "kind",
+            "priority",
+            "search",
+            "sort",
+            "direction",
+            "page",
+            "page_size",
+        }
         if set(query) - allowed:
             raise InvalidRequest("Unknown Work filter.")
         status = query.get("status", "all")
         from .model import STATUSES
+
         if status not in (*STATUSES, "all", "trash"):
             raise InvalidRequest("Invalid status filter.")
         clauses = ["w.deleted_at IS NOT NULL" if status == "trash" else "w.deleted_at IS NULL"]
@@ -228,8 +286,11 @@ class WorkStore:
         if status not in {"all", "trash"}:
             clauses.append("w.status = ?")
             args.append(status)
-        for key, column, values in (("category", "category_id", None), ("kind", "kind", ("project", "task")),
-                                    ("priority", "priority", ("high", "low", "none"))):
+        for key, column, values in (
+            ("category", "category_id", None),
+            ("kind", "kind", ("project", "task")),
+            ("priority", "priority", ("high", "low", "none")),
+        ):
             item = query.get(key, "all")
             if item == "all":
                 continue
@@ -244,13 +305,19 @@ class WorkStore:
         if len(search) > 1000:
             raise InvalidRequest("Search is too long.")
         if search:
-            clauses.append("instr(fold(w.work_title || ' ' || coalesce(w.unit_title,'') || ' ' || "
-                           "coalesce(w.notes,'') || ' ' || c.name || ' ' || w.kind || ' ' || "
-                           "coalesce(w.release_year,'')), ?) > 0")
+            clauses.append(
+                "instr(fold(w.work_title || ' ' || coalesce(w.unit_title,'') || ' ' || "
+                "coalesce(w.notes,'') || ' ' || c.name || ' ' || w.kind || ' ' || "
+                "coalesce(w.release_year,'')), ?) > 0"
+            )
             args.append(search.casefold())
         sort = query.get("sort", "journey")
-        sorts = {"journey": "w.sequence", "title": "fold(w.work_title)", "updated": "w.updated_at",
-                 "priority": "CASE w.priority WHEN 'high' THEN 2 WHEN 'low' THEN 1 ELSE 0 END"}
+        sorts = {
+            "journey": "w.sequence",
+            "title": "fold(w.work_title)",
+            "updated": "w.updated_at",
+            "priority": "CASE w.priority WHEN 'high' THEN 2 WHEN 'low' THEN 1 ELSE 0 END",
+        }
         direction = query.get("direction", "desc")
         if sort not in sorts or direction not in {"asc", "desc"}:
             raise InvalidRequest("Invalid Work sort.")
@@ -262,23 +329,44 @@ class WorkStore:
             raise InvalidRequest("Invalid page or page size.")
         where = " AND ".join(clauses)
         with self.connection() as db:
-            total = db.execute("SELECT COUNT(*) FROM works w JOIN categories c ON c.id=w.category_id WHERE " + where, args).fetchone()[0]
+            total = db.execute(
+                "SELECT COUNT(*) FROM works w JOIN categories c ON c.id=w.category_id WHERE "
+                + where,
+                args,
+            ).fetchone()[0]
             pages = max(1, math.ceil(total / page_size))
             page = min(page, pages)
             order = sorts[sort] + " " + direction
             if sort == "title":
                 order += ", fold(coalesce(w.unit_title,'')) " + direction
-            rows = db.execute("SELECT w.* FROM works w JOIN categories c ON c.id=w.category_id WHERE " + where
-                              + " ORDER BY " + order + ", w.sequence " + direction + " LIMIT ? OFFSET ?",
-                              [*args, page_size, (page - 1) * page_size]).fetchall()
-            counts = {row["bucket"]: row["n"] for row in db.execute(
-                "SELECT CASE WHEN deleted_at IS NOT NULL THEN 'trash' ELSE status END AS bucket, "
-                "COUNT(*) AS n FROM works GROUP BY bucket")}
+            rows = db.execute(
+                "SELECT w.* FROM works w JOIN categories c ON c.id=w.category_id WHERE "
+                + where
+                + " ORDER BY "
+                + order
+                + ", w.sequence "
+                + direction
+                + " LIMIT ? OFFSET ?",
+                [*args, page_size, (page - 1) * page_size],
+            ).fetchall()
+            counts = {
+                row["bucket"]: row["n"]
+                for row in db.execute(
+                    "SELECT CASE WHEN deleted_at IS NOT NULL THEN 'trash' ELSE status END AS bucket, "
+                    "COUNT(*) AS n FROM works GROUP BY bucket"
+                )
+            }
             counts["all"] = sum(v for k, v in counts.items() if k != "trash")
-            return {"entries": [{"record": s.value, "etag": s.etag} for s in map(self._stored, rows)],
-                    "categories": self.categories(db), "counts": counts,
-                    "total": total, "page": page, "pages": pages, "page_size": page_size,
-                    "catalog_revision": self.revision(db)}
+            return {
+                "entries": [{"record": s.value, "etag": s.etag} for s in map(self._stored, rows)],
+                "categories": self.categories(db),
+                "counts": counts,
+                "total": total,
+                "page": page,
+                "pages": pages,
+                "page_size": page_size,
+                "catalog_revision": self.revision(db),
+            }
 
     def state(self) -> dict[str, Any]:
         with self.connection() as db:
@@ -286,9 +374,17 @@ class WorkStore:
 
     def export(self) -> dict[str, Any]:
         with self.connection() as db:
-            return {"schema_version": 1,
-                    "categories": [dict(row) for row in db.execute("SELECT id,name FROM categories ORDER BY name_key")],
-                    "works": [self._stored(row).value for row in db.execute("SELECT * FROM works ORDER BY sequence")]}
+            return {
+                "schema_version": 1,
+                "categories": [
+                    dict(row)
+                    for row in db.execute("SELECT id,name FROM categories ORDER BY name_key")
+                ],
+                "works": [
+                    self._stored(row).value
+                    for row in db.execute("SELECT * FROM works ORDER BY sequence")
+                ],
+            }
 
     def backup(self, destination: Path) -> None:
         """SQLite's backup API also produces a consistent copy while the app runs."""
@@ -319,7 +415,8 @@ class WorkStore:
                 os.replace(temporary, destination)
             finally:
                 temporary.unlink(missing_ok=True)
-            snapshots = sorted(p for p in directory.glob("*.sqlite3")
-                               if p.name.startswith(self.path.stem + "-"))
+            snapshots = sorted(
+                p for p in directory.glob("*.sqlite3") if p.name.startswith(self.path.stem + "-")
+            )
             for old in snapshots[:-7]:
                 old.unlink()

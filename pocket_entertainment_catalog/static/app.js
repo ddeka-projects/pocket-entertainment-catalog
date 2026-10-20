@@ -47,6 +47,11 @@ const STATUS_DATE_FIELDS = {
 };
 
 const elements = {
+  controlGate: document.querySelector("#control-gate"),
+  controlMessage: document.querySelector("#control-message"),
+  takeControl: document.querySelector("#take-control"),
+  releaseControl: document.querySelector("#release-control"),
+  application: document.querySelector("#application"),
   grid: document.querySelector("#catalog-grid"),
   empty: document.querySelector("#empty-state"),
   search: document.querySelector("#catalog-search"),
@@ -86,7 +91,7 @@ const state = {
     rating: "desc",
   },
   sync: { state: "pending", message: "Connecting to the catalog." },
-  editor: { owned: false, claimed: false, heartbeat: null, heartbeatBusy: false },
+  editor: { owned: false, token: null, releasing: null },
   sheet: { mode: null, entryId: null, returnFocus: null, dirty: false },
   loading: true,
   refreshing: false,
@@ -103,7 +108,6 @@ const state = {
   detailEntry: null,
 };
 
-const clientId = persistentIdentity();
 const pageId = randomIdentity("page");
 
 class APIError extends Error {
@@ -123,19 +127,6 @@ function randomIdentity(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${random}`;
 }
 
-function persistentIdentity() {
-  const key = "pocket-catalog-client-id";
-  try {
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const created = randomIdentity("client");
-    sessionStorage.setItem(key, created);
-    return created;
-  } catch (_error) {
-    return randomIdentity("client");
-  }
-}
-
 async function request(path, options = {}) {
   if (isWork && path.startsWith("/api/entries")) path = path.replace("/api/entries", "/api/work/entries");
   const method = options.method || "GET";
@@ -146,9 +137,9 @@ async function request(path, options = {}) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
-  if (options.editor) {
-    headers["X-Catalog-Client"] = clientId;
-    headers["X-Catalog-Page"] = pageId;
+  if (!path.startsWith("/api/controller/") && state.editor.token) {
+    headers["X-Page-Id"] = pageId;
+    headers["X-Controller-Token"] = state.editor.token;
   }
   if (options.etag) headers["If-Match"] = options.etag;
 
@@ -163,6 +154,9 @@ async function request(path, options = {}) {
       keepalive: Boolean(options.keepalive),
     });
   } catch (_error) {
+    if (method !== "GET" && !path.startsWith("/api/controller/")) {
+      throw new APIError("Connection lost before confirmation. Check the catalog before repeating this change; it may already be saved.", "save_uncertain", 0);
+    }
     throw new APIError("The catalog server could not be reached.", "network_error", 0);
   }
 
@@ -174,6 +168,7 @@ async function request(path, options = {}) {
   }
   if (!response.ok || payload.ok === false) {
     const detail = payload?.error || {};
+    if (["controller_required", "controller_transferred", "controller_occupied"].includes(detail.code)) showControlGate(detail.message);
     throw new APIError(detail.message || "The request could not be completed.", detail.code, response.status);
   }
   return payload;
@@ -193,7 +188,6 @@ async function loadCatalog({ quiet = false } = {}) {
     state.mediaTypes = payload.media_types;
     state.statuses = payload.statuses;
     state.sync = payload.sync;
-    state.editor.claimed = Boolean(payload.editor?.claimed);
     state.catalogRevision = payload.catalog_revision;
     state.loading = false;
     renderFilters();
@@ -205,6 +199,7 @@ async function loadCatalog({ quiet = false } = {}) {
     }
   } catch (error) {
     state.loading = false;
+    if (!state.editor.owned) return;
     if (quiet) toast(error.message, "error");
     else renderLoadError(error);
   } finally {
@@ -486,71 +481,65 @@ function updateSync(sync) {
   elements.syncButton.title = sync.message || "Catalog storage status";
 }
 
-async function acquireEditor() {
+function showControlGate(message = "This app is open in another tab or device. Take control to continue here.") {
+  state.editor.owned = false;
+  state.editor.token = null;
+  state.entries = [];
+  state.detailEntry = null;
+  elements.grid.innerHTML = "";
+  elements.sheetBody.innerHTML = "";
+  elements.layer.hidden = true;
+  state.sheet.mode = null;
+  state.sheet.dirty = false;
+  document.body.classList.remove("sheet-open");
+  elements.controlMessage.textContent = message;
+  elements.controlGate.hidden = false;
+  elements.application.inert = true;
+}
+
+function hideControlGate() {
+  elements.controlGate.hidden = true;
+  elements.application.inert = false;
+}
+
+async function acquireEditor({ takeover = false } = {}) {
   if (state.editor.releasing) await state.editor.releasing;
   if (state.editor.owned) return true;
   try {
-    await request("/api/editor/claim", {
-      method: "POST",
-      body: { client_id: clientId, page_id: pageId },
+    const payload = await request(`/api/controller/${takeover ? "takeover" : "claim"}`, {
+      method: "POST", body: { page_id: pageId },
     });
     state.editor.owned = true;
-    state.editor.claimed = true;
-    startHeartbeat();
+    state.editor.token = payload.token;
+    hideControlGate();
     return true;
   } catch (error) {
-    if (error.code === "lease_conflict" || error.status === 423) {
-      toast("Another page is editing right now. You can keep browsing and try again shortly.", "error", 5200);
-    } else {
-      toast(error.message, "error");
-    }
+    showControlGate(error.message);
     return false;
   }
 }
 
-function startHeartbeat() {
-  stopHeartbeat();
-  state.editor.heartbeat = window.setInterval(async () => {
-    if (!state.editor.owned || state.editor.heartbeatBusy) return;
-    state.editor.heartbeatBusy = true;
-    try {
-      await request("/api/editor/heartbeat", {
-        method: "POST",
-        body: { client_id: clientId, page_id: pageId },
-      });
-    } catch (error) {
-      state.editor.owned = false;
-      state.editor.claimed = error.code === "lease_conflict";
-      stopHeartbeat();
-      toast("The editing lease was lost. Reopen the editor before saving.", "error", 5200);
-    } finally {
-      state.editor.heartbeatBusy = false;
-    }
-  }, 5_000);
-}
-
-function stopHeartbeat() {
-  if (state.editor.heartbeat !== null) {
-    clearInterval(state.editor.heartbeat);
-    state.editor.heartbeat = null;
-  }
-}
-
-async function releaseEditor({ keepalive = false } = {}) {
+async function releaseControl({ keepalive = false } = {}) {
   if (!state.editor.owned) return state.editor.releasing;
-  stopHeartbeat();
-  state.editor.owned = false;
-  state.editor.claimed = false;
-  const releasing = request("/api/editor/release", {
-      method: "POST",
-      body: { client_id: clientId, page_id: pageId },
-      keepalive,
-    }).catch(() => {});
+  const token = state.editor.token;
+  showControlGate("Control released. Take control to open the app here again.");
+  const releasing = request("/api/controller/release", {
+    method: "POST", body: { page_id: pageId, token }, keepalive,
+  }).catch(() => {});
   state.editor.releasing = releasing;
   try {
     await releasing;
   } finally {
     if (state.editor.releasing === releasing) state.editor.releasing = null;
+  }
+}
+
+async function startApplication({ takeover = false } = {}) {
+  elements.takeControl.disabled = true;
+  try {
+    if (await acquireEditor({ takeover })) await loadCatalog();
+  } finally {
+    elements.takeControl.disabled = false;
   }
 }
 
@@ -574,7 +563,6 @@ async function closeLayer({ force = false } = {}) {
   state.sheet.returnFocus = null;
   state.sheet.dirty = false;
   elements.sheetBody.innerHTML = "";
-  await releaseEditor();
   if (returnFocus instanceof HTMLElement && document.contains(returnFocus)) returnFocus.focus();
 }
 
@@ -654,8 +642,7 @@ async function openEdit(recordId) {
   if (!await acquireEditor()) return;
   const entry = entryById(recordId);
   if (!entry) {
-    await releaseEditor();
-    toast(`That ${itemName} is no longer available.`, "error");
+      toast(`That ${itemName} is no longer available.`, "error");
     return;
   }
   state.sheet.mode = "edit";
@@ -742,8 +729,7 @@ async function openTransition(recordId, target) {
   if (!await acquireEditor()) return;
   const entry = entryById(recordId);
   if (!entry) {
-    await releaseEditor();
-    toast(`That ${itemName} is no longer available.`, "error");
+      toast(`That ${itemName} is no longer available.`, "error");
     return;
   }
   const label = transitionLabel(entry.record.status, target);
@@ -781,8 +767,7 @@ async function openHistoryCorrection(recordId) {
   if (!await acquireEditor()) return;
   const entry = entryById(recordId);
   if (!entry) {
-    await releaseEditor();
-    toast("That journey is no longer available.", "error");
+      toast("That journey is no longer available.", "error");
     return;
   }
   const record = entry.record;
@@ -899,8 +884,7 @@ async function submitTransition(form) {
     updateSync(response.sync);
     state.sheet.dirty = false;
     renderDetail(response.entry);
-    await releaseEditor();
-    toast(`${isWork ? "Work" : "Journey"} moved to ${statusInfo(target).label}.`, "success");
+      toast(`${isWork ? "Work" : "Journey"} moved to ${statusInfo(target).label}.`, "success");
   });
 }
 
@@ -941,8 +925,7 @@ async function submitHistory(form) {
     updateSync(response.sync);
     state.sheet.dirty = false;
     renderDetail(response.entry);
-    await releaseEditor();
-    toast("Lifecycle history corrected.", "success");
+      toast("Lifecycle history corrected.", "success");
   });
 }
 
@@ -998,10 +981,7 @@ function mutationError(error) {
     closeLayer({ force: true });
     return;
   }
-  if (["lease_expired", "lease_conflict"].includes(error.code)) {
-    state.editor.owned = false;
-    stopHeartbeat();
-  }
+  if (["controller_required", "controller_transferred", "controller_occupied"].includes(error.code)) showControlGate(error.message);
   toast(error.message || "The change could not be saved.", "error", 5400);
 }
 
@@ -1026,7 +1006,6 @@ async function retrySync() {
   } catch (error) {
     toast(error.message, "error");
   } finally {
-    if (state.sheet.mode === null) await releaseEditor();
   }
 }
 
@@ -1099,6 +1078,8 @@ elements.grid.addEventListener("click", (event) => {
 elements.sheetBody.addEventListener("click", async (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
+  if (isWork && action === "download-backup") return downloadWorkFile("backup");
+  if (isWork && action === "export-json") return downloadWorkFile("export");
   if (isWork && action.startsWith("category-")) return handleCategoryAction(action, event);
   if (isWork && action === "add-legacy-work") return openLegacyCreate();
   if (action === "edit") await openEdit(state.sheet.entryId);
@@ -1111,8 +1092,7 @@ elements.sheetBody.addEventListener("click", async (event) => {
     const entry = entryById(state.sheet.entryId);
     if (entry) renderDetail(entry);
     else await closeLayer({ force: true });
-    await releaseEditor();
-  }
+    }
 });
 
 elements.sheetBody.addEventListener("submit", async (event) => {
@@ -1175,43 +1155,24 @@ function trapSheetFocus(event) {
   }
 }
 
-window.addEventListener("pagehide", () => {
-  if (!state.editor.owned) return;
-  stopHeartbeat();
-  fetch("/api/editor/release", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: clientId, page_id: pageId }),
-    keepalive: true,
-    credentials: "same-origin",
-  }).catch(() => {});
-  state.editor.owned = false;
+document.querySelectorAll("[data-profile]").forEach((link) => {
+  link.addEventListener("click", async (event) => {
+    event.preventDefault();
+    if (state.sheet.dirty && !window.confirm("Discard the unsaved changes in this form?")) return;
+    await releaseControl();
+    window.location.href = link.href;
+  });
 });
 
-window.setInterval(async () => {
-  try {
-    const payload = await request(isWork ? "/api/work/state" : "/api/state");
-    if (isWork) {
-      elements.syncLabel.textContent = "Local storage";
-      elements.syncButton.dataset.state = "unavailable";
-    }
-    updateSync(payload.sync);
-    state.editor.claimed = state.editor.owned || Boolean(payload.editor?.claimed);
-    if (
-      payload.catalog_revision !== state.catalogRevision
-      && !state.editor.owned
-      && !["create", "legacy", "edit", "transition", "history", "categories"].includes(state.sheet.mode)
-    ) {
-      await loadCatalog({ quiet: true });
-    }
-  } catch (_error) {
-    if (isWork) {
-      elements.syncLabel.textContent = "Connection issue";
-      elements.syncButton.dataset.state = "error";
-    } else updateSync({ state: "error", message: "The catalog server could not be reached." });
+elements.takeControl.addEventListener("click", () => startApplication({ takeover: true }));
+elements.releaseControl.addEventListener("click", () => releaseControl());
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && state.editor.owned && !state.sheet.dirty) {
+    loadCatalog({ quiet: true });
   }
-}, 10_000);
+});
 
 setupProfile();
 updateSortDirectionControl();
-loadCatalog();
+startApplication();

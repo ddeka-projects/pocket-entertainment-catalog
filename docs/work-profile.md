@@ -4,7 +4,7 @@ Work is a separate editing backlog, independent of Journey, Clip Selector folder
 
 ## Storage
 
-`POCKET_CATALOG_WORK_DATA` defaults to `data/editing.sqlite3`. SQLite `user_version` is 1; an unrecognized version is rejected. The initial database contains an empty `works` table and one reserved category, `uncategorized` / `Uncategorized`. Database initialization is transactional.
+`POCKET_ENTERTAINMENT_CATALOG_WORK_DATA` defaults to `data/editing.sqlite3`. SQLite `user_version` is 1; an unrecognized version is rejected. The initial database contains an empty `works` table and one reserved category, `uncategorized` / `Uncategorized`. Database initialization is transactional.
 
 Each request owns its SQLite connection. Foreign keys are enabled on every connection. Writes take a short `BEGIN IMMEDIATE` transaction with a five-second busy timeout. This serializes writes before checking the opened record's ETag, so stale versions cannot overwrite newer changes. SQLite handles journaled commits and rollback. The database stays on the server's local disk.
 
@@ -41,7 +41,7 @@ Reserved Uncategorized is protected against both rename and deletion, including 
 
 ## HTTP
 
-All routes use the existing trusted-LAN, Host, same-origin, and JSON-body policies. Mutations require the shared editor lease and `X-Catalog-Client` / `X-Catalog-Page` headers. Updates/deletes/transitions require the current `If-Match` ETag. Category creation and work creation need the lease but no prior ETag.
+All routes use the existing trusted-LAN, Host, same-origin, and JSON-body policies. All data routes, including reads and backup downloads, require page control through `X-Page-Id` / `X-Controller-Token` headers. Updates/deletes/transitions require the current `If-Match` ETag. Category creation and work creation need page control but no prior ETag.
 
 | Route | Behavior |
 | --- | --- |
@@ -49,7 +49,7 @@ All routes use the existing trusted-LAN, Host, same-origin, and JSON-body polici
 | `GET /api/work/state` | Lightweight revision. |
 | `GET /api/work/entries/{id}` | One work and ETag, including soft-deleted works. |
 | `POST /api/work/entries` | Create an Investigate work with today's local calendar date. |
-| `POST /api/work/legacy` | Explicit historical creation: normal creation fields plus required `status` and valid `priority`. The server marks the record as legacy and sets all four dates null. Uses the same editor lease. |
+| `POST /api/work/legacy` | Explicit historical creation: normal creation fields plus required `status` and valid `priority`. The server marks the record as legacy and sets all four dates null. Uses the same page controller. |
 | `PATCH /api/work/entries/{id}` | Edit details and valid priority. |
 | `POST /api/work/entries/{id}/transition` | Sequential status change, date, optional notes, and required priority when planning. |
 | `PUT /api/work/entries/{id}/history` | Correct `dates` for the existing status. |

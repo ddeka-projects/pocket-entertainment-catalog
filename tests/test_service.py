@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from pocket_entertainment_catalog.lease import EditorLease
+from pocket_entertainment_catalog.controller import ControllerOwnership
 from pocket_entertainment_catalog.service import CatalogService, InvalidRequest, InvalidTransition
 from pocket_entertainment_catalog.storage import CatalogConflict, CatalogStore
 
@@ -19,7 +19,7 @@ class CatalogServiceTests(unittest.TestCase):
         self.git = LocalOnlyGitSync()
         self.service = CatalogService(
             CatalogStore(self.catalog_path),
-            EditorLease(),
+            ControllerOwnership(),
             self.git,  # type: ignore[arg-type]
         )
 
@@ -120,7 +120,7 @@ class CatalogServiceTests(unittest.TestCase):
         write_catalog(self.catalog_path, [legacy])
         service = CatalogService(
             CatalogStore(self.catalog_path),
-            EditorLease(),
+            ControllerOwnership(),
             self.git,  # type: ignore[arg-type]
         )
         entry = service.catalog()["entries"][0]
@@ -198,17 +198,15 @@ class CatalogServiceTests(unittest.TestCase):
 
     def test_delete_is_soft_and_restore_is_supported(self) -> None:
         entry = self.service.catalog()["entries"][0]
-        deleted = self.service.delete(
-            entry["record"]["id"], expected_etag=entry["etag"]
-        )["entry"]
+        deleted = self.service.delete(entry["record"]["id"], expected_etag=entry["etag"])["entry"]
 
         self.assertIsNotNone(deleted["record"]["deleted_at"])
         self.assertEqual([], self.service.catalog()["entries"])
         self.assertEqual(1, len(self.service.catalog(include_deleted=True)["entries"]))
 
-        restored = self.service.restore(
-            deleted["record"]["id"], expected_etag=deleted["etag"]
-        )["entry"]
+        restored = self.service.restore(deleted["record"]["id"], expected_etag=deleted["etag"])[
+            "entry"
+        ]
         self.assertIsNone(restored["record"]["deleted_at"])
 
 

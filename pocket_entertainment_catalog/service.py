@@ -8,7 +8,7 @@ import threading
 from typing import Any, Mapping
 
 from .git_sync import GitSync
-from .lease import EditorLease
+from .controller import ControllerOwnership
 from .model import (
     DATE_FIELDS,
     MEDIA_TYPES,
@@ -61,11 +61,11 @@ class CatalogService:
     def __init__(
         self,
         store: CatalogStore,
-        editor_lease: EditorLease,
+        controller: ControllerOwnership,
         git_sync: GitSync,
     ) -> None:
         self.store = store
-        self.editor_lease = editor_lease
+        self.controller = controller
         self.git_sync = git_sync
         self._mutation_lock = threading.RLock()
 
@@ -76,7 +76,7 @@ class CatalogService:
             "media_types": list(MEDIA_TYPES),
             "statuses": list(STATUSES),
             "catalog_revision": self.store.catalog_digest,
-            "editor": self._lease_payload(),
+            "controller": self.controller.snapshot(),
             "sync": self.git_sync.snapshot().as_dict(),
         }
 
@@ -88,7 +88,7 @@ class CatalogService:
 
         return {
             "catalog_revision": self.store.catalog_digest,
-            "editor": self._lease_payload(),
+            "controller": self.controller.snapshot(),
             "sync": self.git_sync.snapshot().as_dict(),
         }
 
@@ -136,9 +136,13 @@ class CatalogService:
             self._require_active(record)
             before = deepcopy(record)
             if "work_title" in payload:
-                record["work_title"] = self._required_title(payload["work_title"], "work_title", 300)
+                record["work_title"] = self._required_title(
+                    payload["work_title"], "work_title", 300
+                )
             if "unit_title" in payload:
-                record["unit_title"] = self._optional_title(payload["unit_title"], "unit_title", 200)
+                record["unit_title"] = self._optional_title(
+                    payload["unit_title"], "unit_title", 200
+                )
             if "media_type" in payload:
                 record["media_type"] = self._media_type(payload["media_type"])
             if "release_year" in payload:
@@ -184,9 +188,7 @@ class CatalogService:
             self._require_active(record)
             source = record["status"]
             if target not in TRANSITIONS[source]:
-                raise InvalidTransition(
-                    f"Cannot move {source} directly to {target}."
-                )
+                raise InvalidTransition(f"Cannot move {source} directly to {target}.")
             record["status"] = target
             is_resume = source == "paused" and target == "ongoing"
             if target != "paused" and not is_resume:
@@ -214,9 +216,7 @@ class CatalogService:
 
         with self._mutation_lock:
             stored = self.store.mutate(record_id, expected_etag=expected_etag, operation=operation)
-            sync = self.git_sync.record_change(
-                f"catalog: {target} {self._display(stored.value)}"
-            )
+            sync = self.git_sync.record_change(f"catalog: {target} {self._display(stored.value)}")
         return {"entry": self._public_record(stored), "sync": sync.as_dict()}
 
     def correct_history(
@@ -279,10 +279,6 @@ class CatalogService:
 
     def retry_sync(self) -> dict[str, Any]:
         return {"sync": self.git_sync.retry().as_dict()}
-
-    def _lease_payload(self) -> dict[str, Any]:
-        snapshot = self.editor_lease.snapshot()
-        return {"claimed": snapshot.claimed, "expires_at": snapshot.expires_at}
 
     @staticmethod
     def _public_record(record: StoredRecord) -> dict[str, Any]:

@@ -45,9 +45,7 @@ EXPECTED_EXCLUSIONS = 12
 EXPECTED_OUTPUT_RECORDS = 310
 
 CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-TIMESTAMP_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
-)
+TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
 
 class CatalogImportError(RuntimeError):
@@ -202,7 +200,7 @@ def slugify(value: str) -> str:
     ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
     ascii_value = re.sub(r"['’]", "", ascii_value.lower())
     slug = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
-    return (slug[:64].rstrip("-") or "item")
+    return slug[:64].rstrip("-") or "item"
 
 
 def parse_timestamp(timestamp: str) -> datetime:
@@ -395,9 +393,7 @@ def semantic_key(record: dict[str, Any]) -> tuple[str, str, str]:
 
 def validate_catalog(records: list[dict[str, Any]], *, expected_count: int) -> None:
     if len(records) != expected_count:
-        raise CatalogImportError(
-            f"Expected {expected_count} records, generated {len(records)}"
-        )
+        raise CatalogImportError(f"Expected {expected_count} records, generated {len(records)}")
 
     ids: set[str] = set()
     semantic_records: dict[tuple[str, str, str], str] = {}
@@ -424,7 +420,11 @@ def validate_catalog(records: list[dict[str, Any]], *, expected_count: int) -> N
             raise CatalogImportError(f"Invalid unit title for {record_id}")
         if record.get("rating") is not None:
             rating = record["rating"]
-            if record["status"] not in TERMINAL_STATUSES or not isinstance(rating, int) or not 1 <= rating <= 10:
+            if (
+                record["status"] not in TERMINAL_STATUSES
+                or not isinstance(rating, int)
+                or not 1 <= rating <= 10
+            ):
                 raise CatalogImportError(f"Invalid rating for {record_id}")
         if record.get("release_year") is not None and not isinstance(record["release_year"], int):
             raise CatalogImportError(f"Invalid release year for {record_id}")
@@ -457,8 +457,7 @@ def validate_catalog(records: list[dict[str, Any]], *, expected_count: int) -> N
         key = semantic_key(record)
         if key in semantic_records:
             raise CatalogImportError(
-                "Duplicate journey unit: "
-                f"{semantic_records[key]} and {record_id} share {key!r}"
+                "Duplicate journey unit: " f"{semantic_records[key]} and {record_id} share {key!r}"
             )
         semantic_records[key] = record_id
 
@@ -510,14 +509,11 @@ def validate_catalog(records: list[dict[str, Any]], *, expected_count: int) -> N
         "The Lion King": 1,
     }
     actual_animation_counts = Counter(
-        record["work_title"]
-        for record in records
-        if record["media_type"] == "animation"
+        record["work_title"] for record in records if record["media_type"] == "animation"
     )
     if actual_animation_counts != Counter(expected_animation_counts):
         raise CatalogImportError(
-            "Unexpected non-anime animation classification: "
-            f"{dict(actual_animation_counts)!r}"
+            "Unexpected non-anime animation classification: " f"{dict(actual_animation_counts)!r}"
         )
 
 
@@ -530,9 +526,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
             try:
                 value = json.loads(line)
             except json.JSONDecodeError as error:
-                raise CatalogImportError(
-                    f"Invalid JSON on line {line_number}: {error}"
-                ) from error
+                raise CatalogImportError(f"Invalid JSON on line {line_number}: {error}") from error
             if not isinstance(value, dict):
                 raise CatalogImportError(f"JSONL line {line_number} is not an object")
             records.append(value)
@@ -575,9 +569,7 @@ def existing_import_timestamp(path: Path) -> str | None:
     if not timestamps:
         raise CatalogImportError("Existing catalog contains no initial-import records")
     if len(timestamps) != 1:
-        raise CatalogImportError(
-            "Existing import records do not share one created_at timestamp"
-        )
+        raise CatalogImportError("Existing import records do not share one created_at timestamp")
     timestamp = timestamps.pop()
     if not isinstance(timestamp, str):
         raise CatalogImportError("Existing catalog has an invalid created_at timestamp")
@@ -586,11 +578,7 @@ def existing_import_timestamp(path: Path) -> str | None:
 
 
 def current_timestamp() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .isoformat(timespec="milliseconds")
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
@@ -619,7 +607,8 @@ def summarize(records: list[dict[str, Any]], exclusions: list[tuple[str, str]]) 
     return "\n".join(
         [
             f"records={len(records)}",
-            "media_types=" + ", ".join(f"{key}:{media_counts[key]}" for key in sorted(media_counts)),
+            "media_types="
+            + ", ".join(f"{key}:{media_counts[key]}" for key in sorted(media_counts)),
             "statuses=" + ", ".join(f"{key}:{status_counts[key]}" for key in sorted(status_counts)),
             "exclusions="
             + ", ".join(f"{key}:{exclusion_counts[key]}" for key in sorted(exclusion_counts)),

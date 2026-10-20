@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import threading
@@ -36,6 +37,12 @@ class HTTPApplicationTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base = self.server.url.rstrip("/")
+        self.owner_headers = {}
+        status, grant = self.call(
+            "/api/controller/claim", method="POST", payload={"page_id": "page-a"}
+        )
+        self.assertEqual(200, status)
+        self.owner_headers = {"X-Page-Id": "page-a", "X-Controller-Token": grant["token"]}
 
     def tearDown(self) -> None:
         self.server.close()
@@ -51,7 +58,7 @@ class HTTPApplicationTests(unittest.TestCase):
         headers: dict[str, str] | None = None,
     ) -> tuple[int, object]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
-        request_headers = dict(headers or {})
+        request_headers = dict(self.owner_headers if headers is None else headers)
         if payload is not None:
             request_headers["Content-Type"] = "application/json"
         request = Request(
@@ -69,7 +76,12 @@ class HTTPApplicationTests(unittest.TestCase):
         except HTTPError as error:
             return error.code, json.loads(error.read())
 
-    def test_static_application_and_open_read_api(self) -> None:
+    def test_static_application_and_owned_read_api(self) -> None:
+        status, health = self.call("/health", headers={})
+        self.assertEqual(200, status)
+        self.assertTrue(health["ok"])
+        self.assertEqual("pocket_entertainment_catalog", health["app"])
+        self.assertTrue(health["instance_id"])
         status, html = self.call("/")
         self.assertEqual(200, status)
         self.assertIn("Entertainment Catalog", html)
@@ -84,40 +96,101 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual(payload["catalog_revision"], lightweight["catalog_revision"])  # type: ignore[index]
         self.assertNotIn("entries", lightweight)  # type: ignore[operator]
 
-    def test_one_editor_does_not_block_other_readers(self) -> None:
-        owner = {"client_id": "client-a", "page_id": "page-a"}
-        status, _payload = self.call("/api/editor/claim", method="POST", payload=owner)
-        self.assertEqual(200, status)
+    def test_another_server_cannot_share_either_data_location(self):
+        with self.assertRaisesRegex(RuntimeError, "Another server"):
+            PocketCatalogServer(self.server.settings)
+        other_catalog = self.server.settings.catalog_path.parent / "other.jsonl"
+        write_catalog(other_catalog, [])
+        with self.assertRaisesRegex(RuntimeError, "Another server"):
+            PocketCatalogServer(replace(self.server.settings, catalog_path=other_catalog))
 
-        # A second device may continue browsing while the first one edits.
-        status, payload = self.call("/api/catalog?deleted=include")
-        self.assertEqual(200, status)
-        self.assertTrue(payload["editor"]["claimed"])  # type: ignore[index]
+    def test_takeover_waits_for_the_complete_authorized_save(self):
+        entered = threading.Event()
+        finish_save = threading.Event()
+        transferred = threading.Event()
+        results = {}
+        original_create = self.server.service.create
 
+        def slow_create(payload):
+            entered.set()
+            if not finish_save.wait(2):
+                raise RuntimeError("Test save was never released")
+            return original_create(payload)
+
+        def save():
+            results["save"] = self.call(
+                "/api/entries",
+                method="POST",
+                payload={"work_title": "Saved before takeover", "media_type": "manga"},
+            )
+
+        def takeover():
+            results["takeover"] = self.call(
+                "/api/controller/takeover", method="POST", payload={"page_id": "new-page"}
+            )
+            transferred.set()
+
+        with patch.object(self.server.service, "create", slow_create):
+            saving = threading.Thread(target=save)
+            taking = threading.Thread(target=takeover)
+            saving.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                taking.start()
+                self.assertFalse(transferred.wait(0.1))
+            finally:
+                finish_save.set()
+                saving.join(3)
+                if taking.ident is not None:
+                    taking.join(3)
+        self.assertEqual(201, results["save"][0])
+        self.assertEqual(200, results["takeover"][0])
+        self.assertEqual(423, self.call("/api/catalog")[0])
+
+    def test_controller_blocks_reads_and_explicit_takeover_revokes_previous_page(self) -> None:
+        for path in (
+            "/api/catalog",
+            "/api/state",
+            "/api/work/catalog",
+            "/api/work/backup",
+            "/api/work/export",
+        ):
+            status, payload = self.call(path, headers={})
+            self.assertEqual(423, status, path)
+            self.assertEqual("controller_transferred", payload["error"]["code"])
         status, payload = self.call(
-            "/api/editor/claim",
-            method="POST",
-            payload={"client_id": "client-b", "page_id": "page-b"},
+            "/api/controller/claim", method="POST", payload={"page_id": "page-b"}
         )
         self.assertEqual(423, status)
-        self.assertEqual("lease_conflict", payload["error"]["code"])  # type: ignore[index]
+        self.assertEqual("controller_occupied", payload["error"]["code"])
+        status, grant = self.call(
+            "/api/controller/takeover", method="POST", payload={"page_id": "page-b"}
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(423, self.call("/api/catalog")[0])
+        current = {"X-Page-Id": "page-b", "X-Controller-Token": grant["token"]}
+        self.assertEqual(200, self.call("/api/catalog", headers=current)[0])
+        status, _ = self.call(
+            "/api/controller/release",
+            method="POST",
+            payload={"page_id": "page-b", "token": grant["token"]},
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(409, self.call("/api/catalog", headers=current)[0])
 
     def test_mutation_needs_owner_headers_and_current_etag(self) -> None:
         status, catalog = self.call("/api/catalog?deleted=include")
         entry = catalog["entries"][0]  # type: ignore[index]
         path = f"/api/entries/{entry['record']['id']}"
 
-        status, _payload = self.call(path, method="PATCH", payload={"notes": "No lease"})
-        self.assertEqual(400, status)
-
-        owner = {"client_id": "client-a", "page_id": "page-a"}
-        self.call("/api/editor/claim", method="POST", payload=owner)
-        headers = {
-            "X-Catalog-Client": owner["client_id"],
-            "X-Catalog-Page": owner["page_id"],
-            "If-Match": entry["etag"],
-        }
-        status, updated = self.call(path, method="PATCH", payload={"notes": "Owned edit"}, headers=headers)
+        status, _payload = self.call(
+            path, method="PATCH", payload={"notes": "No control"}, headers={}
+        )
+        self.assertEqual(423, status)
+        headers = self.owner_headers | {"If-Match": entry["etag"]}
+        status, updated = self.call(
+            path, method="PATCH", payload={"notes": "Owned edit"}, headers=headers
+        )
         self.assertEqual(200, status)
         self.assertEqual("Owned edit", updated["entry"]["record"]["notes"])  # type: ignore[index]
 
@@ -126,8 +199,7 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual("edit_conflict", stale["error"]["code"])  # type: ignore[index]
 
     def work_owner(self):
-        self.call("/api/editor/claim", method="POST", payload={"client_id": "work-client", "page_id": "work-page"})
-        return {"X-Catalog-Client": "work-client", "X-Catalog-Page": "work-page"}
+        return dict(self.owner_headers)
 
     def test_work_starts_empty_and_mutations_are_isolated_from_journey_and_git(self):
         status, data = self.call("/api/work/catalog")
@@ -136,48 +208,80 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual("Uncategorized", data["categories"][0]["name"])
         before = self.server.store.path.read_bytes()
         payload = {"work_title": "Kaleido Star", "kind": "project", "category_id": "uncategorized"}
-        self.assertEqual(400, self.call("/api/work/entries", method="POST", payload=payload)[0])
+        self.assertEqual(
+            423, self.call("/api/work/entries", method="POST", payload=payload, headers={})[0]
+        )
         headers = self.work_owner()
         with patch.object(self.server.git_sync, "record_change") as git_change:
-            status, response = self.call("/api/work/entries", method="POST", payload=payload, headers=headers)
+            status, response = self.call(
+                "/api/work/entries", method="POST", payload=payload, headers=headers
+            )
             self.assertEqual(201, status)
             entry = response["entry"]
             route = "/api/work/entries/" + entry["record"]["id"]
             headers["If-Match"] = entry["etag"]
-            self.assertEqual(400, self.call(route + "/transition", method="POST", payload={"status": "planned"}, headers=headers)[0])
-            status, planned = self.call(route + "/transition", method="POST", payload={"status": "planned", "priority": "high"}, headers=headers)
+            self.assertEqual(
+                400,
+                self.call(
+                    route + "/transition",
+                    method="POST",
+                    payload={"status": "planned"},
+                    headers=headers,
+                )[0],
+            )
+            status, planned = self.call(
+                route + "/transition",
+                method="POST",
+                payload={"status": "planned", "priority": "high"},
+                headers=headers,
+            )
             self.assertEqual(200, status)
             self.assertEqual("high", planned["entry"]["record"]["priority"])
-            self.assertEqual(412, self.call(route, method="PATCH", payload={"notes": "stale"}, headers=headers)[0])
+            self.assertEqual(
+                412,
+                self.call(route, method="PATCH", payload={"notes": "stale"}, headers=headers)[0],
+            )
             git_change.assert_not_called()
         self.assertEqual(before, self.server.store.path.read_bytes())
 
-    def test_work_categories_require_a_lease_and_current_version(self):
+    def test_work_categories_require_control_and_current_version(self):
         path = "/api/work/categories"
-        self.assertEqual(400, self.call(path, method="POST", payload={"name": "Anime"})[0])
+        self.assertEqual(
+            423, self.call(path, method="POST", payload={"name": "Anime"}, headers={})[0]
+        )
         headers = self.work_owner()
         status, data = self.call(path, method="POST", payload={"name": "Anime"}, headers=headers)
         self.assertEqual(201, status)
         category = next(c for c in data["categories"] if c["name"] == "Anime")
-        self.assertEqual(400, self.call(path, method="POST", payload={"name": " anime "}, headers=headers)[0])
+        self.assertEqual(
+            400, self.call(path, method="POST", payload={"name": " anime "}, headers=headers)[0]
+        )
         route = path + "/" + category["id"]
         headers["If-Match"] = category["etag"]
-        self.assertEqual(200, self.call(route, method="PATCH", payload={"name": "Animation"}, headers=headers)[0])
+        self.assertEqual(
+            200, self.call(route, method="PATCH", payload={"name": "Animation"}, headers=headers)[0]
+        )
         self.assertEqual(412, self.call(route, method="DELETE", headers=headers)[0])
         default = data["categories"][0]
         headers["If-Match"] = default["etag"]
-        self.assertEqual(400, self.call(path + "/uncategorized", method="DELETE", headers=headers)[0])
+        self.assertEqual(
+            400, self.call(path + "/uncategorized", method="DELETE", headers=headers)[0]
+        )
 
     def test_work_requests_share_the_origin_checks_and_filter_validation(self):
         headers = self.work_owner() | {"Origin": "http://untrusted.example"}
-        self.assertEqual(403, self.call("/api/work/entries", method="POST", payload={}, headers=headers)[0])
+        self.assertEqual(
+            403, self.call("/api/work/entries", method="POST", payload={}, headers=headers)[0]
+        )
         self.assertEqual(400, self.call("/api/work/catalog?page_size=1000")[0])
         self.assertEqual(400, self.call("/api/work/catalog?status=all&status=planned")[0])
         self.assertEqual(400, self.call("/api/work/catalog?unknown=value")[0])
-        self.assertEqual(200, self.call("/assets/work.js")[0])
+        self.assertEqual(200, self.call("/static/work.js")[0])
 
     def test_work_backup_download_is_sqlite(self):
-        with urlopen(self.base + "/api/work/backup", timeout=2) as response:
+        with urlopen(
+            Request(self.base + "/api/work/backup", headers=self.owner_headers), timeout=2
+        ) as response:
             self.assertEqual("application/vnd.sqlite3", response.headers["Content-Type"])
             self.assertTrue(response.read().startswith(b"SQLite format 3\0"))
         status, exported = self.call("/api/work/export")
@@ -186,16 +290,36 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual([], exported["works"])
 
     def test_explicit_legacy_route_requires_ownership_and_keeps_normal_creation_strict(self):
-        payload = {"work_title": "Historical anime", "kind": "project", "category_id": "uncategorized", "status": "completed", "priority": "high"}
-        self.assertEqual(400, self.call("/api/work/legacy", method="POST", payload=payload)[0])
+        payload = {
+            "work_title": "Historical anime",
+            "kind": "project",
+            "category_id": "uncategorized",
+            "status": "completed",
+            "priority": "high",
+        }
+        self.assertEqual(
+            423, self.call("/api/work/legacy", method="POST", payload=payload, headers={})[0]
+        )
         headers = self.work_owner()
-        self.assertEqual(400, self.call("/api/work/entries", method="POST", payload=payload, headers=headers)[0])
-        status, saved = self.call("/api/work/legacy", method="POST", payload=payload, headers=headers)
+        self.assertEqual(
+            400, self.call("/api/work/entries", method="POST", payload=payload, headers=headers)[0]
+        )
+        status, saved = self.call(
+            "/api/work/legacy", method="POST", payload=payload, headers=headers
+        )
         self.assertEqual(201, status)
         self.assertEqual("completed", saved["entry"]["record"]["status"])
         self.assertTrue(saved["entry"]["record"]["legacy_history"])
         self.assertTrue(all(v is None for v in saved["entry"]["record"]["dates"].values()))
-        self.assertEqual(400, self.call("/api/work/legacy", method="POST", payload=payload | {"priority": None}, headers=headers)[0])
+        self.assertEqual(
+            400,
+            self.call(
+                "/api/work/legacy",
+                method="POST",
+                payload=payload | {"priority": None},
+                headers=headers,
+            )[0],
+        )
 
 
 if __name__ == "__main__":

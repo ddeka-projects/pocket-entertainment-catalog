@@ -4,7 +4,7 @@ A small, self-hosted catalog for tracking entertainment as journey units: a seas
 
 Use the **Journey** profile to track watching, reading, and gaming, and the **Work** profile to plan and track personal editing projects and tasks. Switch profiles using the tabs below the header. Both use the same mobile-friendly cards and editing sheets, with independent records and progress.
 
-Journey's database is [`data/catalog.jsonl`](data/catalog.jsonl), with automatic Git synchronization. Work uses a separate local SQLite database, created automatically on first startup. The application uses only Python's standard library, so there is no package-install step.
+Journey's database is [`data/catalog.jsonl`](data/catalog.jsonl), with automatic Git synchronization. Work uses a separate local SQLite database, created automatically on first startup. The application uses Python 3.11 or newer and only the standard library. Windows setup creates a repository-local `.venv`, matching the sibling apps.
 
 ## Work profile
 
@@ -18,39 +18,39 @@ Lifecycle dates use Journey's chronology and backdating confirmation rules. **Co
 
 To enter historical work yourself, open **Add work → Adding old work? Add legacy work**. Select its existing status and a High/Low priority (except Investigate, which has no priority). All four lifecycle dates are saved as unknown, with the record explicitly marked as legacy. You can fill dates later using **Correct dates**. Ordinary new works still start in Investigate with today's date and progress sequentially; a legacy work's subsequent transitions also follow that progression. Bulk spreadsheet import is not provided.
 
-Work searches, filters (status, category, kind, priority), sorting, and 48-record pagination run on the server. Work shares the single-editor lease and stale-record safeguards with Journey. Reads remain available to other devices.
+Work searches, filters (status, category, kind, priority), sorting, and 48-record pagination run on the server. Work shares the single controlling page and stale-record safeguards with Journey.
 
 Work data lives in `data/editing.sqlite3` by default and is excluded from Git. It never creates catalog commits or pushes. Open the **Local storage** button in the header for **Download backup**, which produces a consistent SQLite snapshot, or **Export JSON**, which downloads all categories and works, including Trash. The first successful write each local day also creates a snapshot under `data/work-backups/`, retaining the latest seven daily snapshots for that database. Backup failures are logged separately from successful primary saves. These files are local: include them in your computer's backup plan.
 
 To restore a downloaded SQLite backup, stop the server, copy the backup over the configured Work database, and restart. Keep a copy of the database you are replacing. See [the Work data contract](docs/work-profile.md) for storage and API details.
 
-## Start the app
+## First-time Windows setup
 
-From this folder, run:
-
-```sh
-python3 run.py
-```
-
-The server prints an address such as `http://192.168.1.20:8766/`. Open it on the computer running the server or on another device connected to the same private network. Keep the terminal open while using the app.
-
-The default port is `8766`. If macOS asks whether Python may accept incoming connections, allow it for private networks so a phone can connect.
-
-## Windows scheduled startup
-
-The Windows launcher and Task Scheduler scripts live under `scripts`. The server starts when your Windows user signs in, under that account with limited privileges. This lets the application use the same Git author configuration and GitHub credentials that work in your normal terminal. The PC must be signed in and awake for other devices to connect.
-
-First, confirm the launcher works from PowerShell in the project folder:
+Use Windows PowerShell 5.1+ and Python 3.11 or newer. From the repository folder:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run-server.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap-windows.ps1
 ```
 
-Stop it with `Ctrl+C`, then install and immediately start the scheduled task from ordinary PowerShell:
+Bootstrap creates the repository-local `.venv`, prepares its requirements, and creates `.env` from [`.env.example`](.env.example) when missing. It preserves existing configuration and data. The defaults work without editing `.env`; see [Configuration](#configuration) for optional changes.
+
+Confirm foreground operation from ordinary PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1
+```
+
+Open `http://127.0.0.1:8766/` on the PC or the printed LAN address, such as `http://192.168.1.20:8766/`, on your phone. Both devices must use the same private network. Keep the foreground terminal open; stop with `Ctrl+C`. Restart the foreground server after Python code changes.
+
+## Start automatically at your logon
+
+Stop any foreground instance, then install from ordinary PowerShell in the repository:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1
 ```
+
+This installs and immediately starts **Pocket Entertainment Catalog** at your Windows user logon, with limited privileges and `.venv\Scripts\pythonw.exe`. It runs without a terminal, ignores duplicate task starts, has no runtime limit, and retries errors up to three times at one-minute intervals. The same Windows account supplies folder permissions, Git author configuration, and GitHub credentials. The PC must remain signed in and awake.
 
 For first-time phone access or after changing the port, run from **PowerShell as Administrator using the same Windows account**:
 
@@ -58,25 +58,11 @@ For first-time phone access or after changing the port, run from **PowerShell as
 powershell -ExecutionPolicy Bypass -File .\scripts\install-startup-task.ps1 -ConfigureFirewall
 ```
 
-This allows the configured TCP port only from `LocalSubnet` on the **Private** firewall profile. Without `-ConfigureFirewall`, the installer leaves firewall rules untouched. The server always runs with limited privileges.
+The optional firewall rule allows the configured TCP port only from `LocalSubnet` on the **Private** profile. Normal installation leaves firewall rules untouched. Keep the Windows network marked Private and use the PC's LAN address on the phone.
 
-The task is named `Pocket Entertainment Catalog`. It starts at user logon without opening a terminal, ignores duplicate starts, has no runtime limit, and retries up to three times when the server exits with an error. Logs are appended to:
+After updating application code, rerun bootstrap to apply any dependency changes, then double-click **`restart-server.cmd`** in the repository root. It stops the registered task, waits for it to stop, starts it, and verifies a fresh `/health` response from this app. It requests UAC elevation only if Windows denies task-management permission. Success, cancellation, and failures stay visible until you press Enter. Finish active saves first. Reinstall the task after changing startup scripts or moving the repository.
 
-```text
-.tmp\server.log
-```
-
-If Python is not discovered automatically, add its full path to `.env`:
-
-```dotenv
-POCKET_CATALOG_PYTHON=C:\Python313\python.exe
-```
-
-Use a stable Python installation path; the scripts require Python 3.10 or newer. The scheduled task uses the console-free `pythonw.exe` installed beside the configured `python.exe`.
-
-After updating the code or `.env`, finish active saves and rerun the installer to restart the server.
-
-To stop and remove automatic startup:
+To stop and remove automatic startup from ordinary PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1
@@ -84,13 +70,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\remove-startup-task.ps1 -RemoveFirewall
 ```
 
-Removal leaves firewall rules in place unless `-RemoveFirewall` is supplied. Catalog and Work data are retained.
+Removal leaves firewall rules unless `-RemoveFirewall` is supplied. It keeps `.env`, `.venv`, logs, and all Journey and Work data.
 
-If the task exists but the phone cannot connect, confirm the PC's network is **Private**, configure the firewall with `-ConfigureFirewall`, and check that the phone and PC are on the same network. Use the PC's LAN address, such as `http://192.168.1.20:8766/`, rather than `localhost` on the phone.
+Logs, including startup failures, go to `logs\server.log` beside the code. The file rotates at 5 MiB with three backups. If the PC URL fails, check this log, `.env`, task state, and whether another server already uses the data. If only phone access fails, check the active LAN address, network profile, and firewall rule.
 
-## What the first version supports
+## Features
 
-- Browse from any number of devices at the same time.
+- Use the same web app on your phone or desktop; explicitly take control when switching pages.
 - Search, sort, and filter by lifecycle status or media type.
 - Add a journey; only the work title needs to be typed. Media type defaults to the active filter or the last-used value.
 - Move entries through `Investigate → Planned → Ongoing → Completed / Discontinued` with lifecycle dates, or pause an Ongoing journey and resume it later.
@@ -99,15 +85,17 @@ If the task exists but the phone cannot connect, confirm the PC's network is **P
 - Correct backfilled lifecycle history when the normal sequential workflow is not appropriate.
 - Soft-delete entries to Trash and restore them later.
 - Preserve `id`, `created_at`, `updated_at`, and `deleted_at` as server-owned fields.
-- Notice valid external changes to the JSONL and refresh readers automatically.
+- Load valid external JSONL changes when returning to the page.
 
-## One editor, many readers
+## One controlling page
 
-Reading never claims a lock. The app claims its single editing lease only when a page opens an add/edit action or performs a lifecycle mutation.
+The first page opened claims control before any catalog or Work data loads. Another tab or device shows **Take Control** and cannot browse or change data until you select it. Taking control revokes the previous page's requests; that page shows the same gate when it next contacts the server. A save already in progress finishes before control transfers.
 
-The page renews the lease every five seconds. Closing the editor releases it; an abandoned lease expires after fifteen seconds. Every save also carries the record version that was originally opened, so a stale browser cannot silently overwrite a newer change.
+There are no ownership heartbeats, timeouts, or polling. Closing an editing sheet keeps control. **Release Control** deliberately gives it up. Refreshing creates a new page, so you may need to take control again. Switching Journey/Work through the profile tabs releases the old page first. Restarting the server clears ownership.
 
-Run only one catalog server instance. A filesystem lock and atomic replacement protect the JSONL against accidental concurrent processes, but the visible editing lease belongs to one running server.
+If a connection drops during a save, the app reports that confirmation was lost and asks you to check the catalog before repeating it. Saves are never automatically retried.
+
+One server may use each configured data location at a time, even across different ports or checkouts. An operating-system guard releases automatically when the server exits or crashes. ETags, file locks, disk-change detection, atomic JSONL replacement, SQLite transactions, and Work backups continue to protect saved data.
 
 ## GitHub synchronization
 
@@ -125,31 +113,36 @@ The app remains usable without Git; the header says **Local only** until the rep
 
 ## Configuration
 
-Copy [`.env.example`](.env.example) to `.env` only when a default needs changing:
+Bootstrap creates `.env` from [`.env.example`](.env.example). Edit it only when a default needs changing:
 
 ```dotenv
-POCKET_CATALOG_HOST=0.0.0.0
-POCKET_CATALOG_PORT=8766
-POCKET_CATALOG_PUBLIC_HOST=
-POCKET_CATALOG_DATA=data/catalog.jsonl
-POCKET_CATALOG_WORK_DATA=data/editing.sqlite3
-POCKET_CATALOG_PYTHON=
+POCKET_ENTERTAINMENT_CATALOG_HOST=0.0.0.0
+POCKET_ENTERTAINMENT_CATALOG_PORT=8766
+POCKET_ENTERTAINMENT_CATALOG_PUBLIC_HOST=
+POCKET_ENTERTAINMENT_CATALOG_DATA=data/catalog.jsonl
+POCKET_ENTERTAINMENT_CATALOG_WORK_DATA=data/editing.sqlite3
 ```
 
-`0.0.0.0` allows private-network devices to connect. `POCKET_CATALOG_PUBLIC_HOST` only changes the address printed at startup and is normally discovered automatically.
+`0.0.0.0` allows private-network devices to connect. `POCKET_ENTERTAINMENT_CATALOG_PUBLIC_HOST` only changes the address printed at startup and is normally discovered automatically.
 
-`POCKET_CATALOG_WORK_DATA` accepts a local SQLite path, relative to the project folder or absolute. Its parent directory is created automatically. Keep custom database paths and backups out of Git as well. The database belongs on the server's local disk; phones access it through HTTP.
+`POCKET_ENTERTAINMENT_CATALOG_WORK_DATA` accepts a local SQLite path, relative to the project folder or absolute. Its parent directory is created automatically. Keep custom database paths and backups out of Git as well. The database belongs on the server's local disk; phones access it through HTTP.
+
+`.env` is read as literal UTF-8 text (an optional BOM and matching quotes are accepted). Windows backslashes and `$` are preserved; variables are not expanded. Duplicate assignments are rejected. Real environment variables override the file. Relative data paths start at the repository root.
 
 This is a trusted-LAN application without user accounts. It rejects non-private peers and cross-origin mutations, but the port should never be exposed to the public internet.
 
 ## Verify
 
-Run all schema, storage, lease, HTTP, and Git synchronization tests with:
+Install development dependencies, including Black 25.1.0, then check formatting and run the suite:
 
-```sh
-python3 -m unittest discover -v
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m black --check .
+.\.venv\Scripts\python.exe -m unittest discover -v
 ```
 
-The HTTP tests bind only to `127.0.0.1` on a temporary port and all mutation tests use disposable catalog files. They do not modify the checked-in database.
+Tests cover configuration, explicit ownership, safe storage, Work backups, frontend behavior, HTTP request checks, process guards, and Git synchronization. HTTP tests use only loopback with temporary data; they do not modify the checked-in catalog. Frontend checks use Node.js or JavaScriptCore when available.
 
-The architecture and UI rationale are recorded in [`docs/design.md`](docs/design.md), and the exact JSONL contract is in [`docs/data-model.md`](docs/data-model.md).
+Portable PowerShell tests exercise the real scripts with disposable OS adapters. They skip automatically if PowerShell is unavailable; `POCKET_TEST_POWERSHELL` can point to an installed executable. These checks do not register real tasks or change firewall rules. Actual Windows logon, console-free startup, UAC, firewall behavior, and phone access still require testing on the intended PC and device.
+
+The architecture and UI rationale are in [docs/design.md](docs/design.md), the Journey JSONL contract is in [docs/data-model.md](docs/data-model.md), and local Work storage is in [docs/work-profile.md](docs/work-profile.md).

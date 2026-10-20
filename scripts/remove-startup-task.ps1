@@ -1,39 +1,20 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param(
-    [string]$TaskName = "Pocket Entertainment Catalog",
-    [switch]$RemoveFirewall
-)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
+param([string]$TaskName = "", [switch]$RemoveFirewall)
+. (Join-Path $PSScriptRoot "windows-common.ps1")
+if (-not $TaskName) { $TaskName = $PocketAppName }
+Assert-PocketTaskName $TaskName
+if ($RemoveFirewall -and -not (Test-PocketAdministrator)) { throw "-RemoveFirewall requires PowerShell as Administrator under the same Windows account. No changes were made." }
+$task = Get-PocketTask $TaskName
+if ($null -ne $task) {
+    Stop-PocketTask $TaskName
+    Unregister-ScheduledTask -TaskName $TaskName -TaskPath "\" -Confirm:$false -ErrorAction Stop
+    Write-Host "Stopped and removed '$TaskName'."
+}
+else { Write-Host "Scheduled task not found: $TaskName" }
 if ($RemoveFirewall) {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principalCheck = New-Object Security.Principal.WindowsPrincipal($identity)
-    if (-not $principalCheck.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "-RemoveFirewall needs an elevated PowerShell for the same Windows user. No changes were made."
-    }
+    Get-NetFirewallRule -DisplayName "$PocketAppName (Private LAN)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction Stop
+    Write-Host "Removed this app's firewall rule."
 }
-$Task = Get-ScheduledTask -TaskName $TaskName -TaskPath "\" -ErrorAction SilentlyContinue
-
-if ($Task) {
-    try {
-        Stop-ScheduledTask -TaskName $TaskName -TaskPath "\"
-        Unregister-ScheduledTask -TaskName $TaskName -TaskPath "\" -Confirm:$false
-    }
-    catch [System.UnauthorizedAccessException] {
-        throw "Permission was denied. Re-run PowerShell as Administrator using the Windows account that owns this task."
-    }
-    Write-Host "Stopped and removed scheduled task: $TaskName"
-}
-else {
-    Write-Host "Scheduled task was not found: $TaskName"
-}
-if ($RemoveFirewall) {
-    Get-NetFirewallRule -DisplayName "Pocket Entertainment Catalog (Private LAN)" -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    Write-Host "Removed the Pocket Entertainment Catalog firewall rule."
-}
-else {
-    Write-Host "Firewall was left as configured. To also remove its rules, run this script elevated with -RemoveFirewall."
-}
+else { Write-Host "Firewall unchanged. To also remove its rule, run elevated with -RemoveFirewall." }
+Write-Host "Configuration, application data, media, and backups were retained."

@@ -56,12 +56,8 @@ _REQUIRED_FIELDS = {
     "deleted_at",
 }
 _OPTIONAL_FIELDS = {"import"}
-_ID_PATTERN = re.compile(
-    r"^[a-z0-9]+(?:-[a-z0-9]+)*--[0-9A-HJKMNP-TV-Z]{26}$"
-)
-_TIMESTAMP_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
-)
+_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*--[0-9A-HJKMNP-TV-Z]{26}$")
+_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 _CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 
@@ -291,6 +287,7 @@ def validate_timestamps(value: Mapping[str, Any]) -> None:
         if deleted_at < created_at or updated_at < deleted_at:
             raise ModelError("deleted_at must fall between created_at and updated_at.")
 
+
 def validate_catalog(records: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(records, list):
         raise ModelError("Catalog must be a list of JSON objects.")
@@ -304,9 +301,7 @@ def validate_catalog(records: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
         ids.add(item["id"])
         key = semantic_key(item)
         if key in journeys:
-            raise ModelError(
-                f"Duplicate journey unit: {journeys[key]} and {item['id']}."
-            )
+            raise ModelError(f"Duplicate journey unit: {journeys[key]} and {item['id']}.")
         journeys[key] = item["id"]
         validated.append(item)
     return validated

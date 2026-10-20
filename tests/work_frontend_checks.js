@@ -1,7 +1,10 @@
 (async () => {
   const initial = { entries: [], categories: [{ id: "uncategorized", name: "Uncategorized", work_count: 0 }],
     statuses: Object.keys(STATUS), counts: {}, total: 0, page: 1, pages: 1, catalog_revision: "1" };
-  mockRespond(pendingRequests[0], initial);
+  check(pendingRequests[0].path === "/api/controller/claim", "Startup claims before reading data");
+  mockRespond(pendingRequests[0], { token: "initial-token" });
+  await flushMicrotasks();
+  mockRespond(pendingRequests[1], initial);
   await flushMicrotasks();
   check(!state.loading && state.total === 0, "Empty profile loads");
 
@@ -30,9 +33,10 @@
   state.sheet.entryId = null;
   check(entryById("work-a").etag === "latest", "Reopening uses the current version");
 
-  // A release from the previous sheet must finish before claiming the next one.
+  // Explicit release must finish before a fresh ownership claim. Closing an
+  // editing sheet keeps whole-app ownership.
   state.editor.owned = true;
-  const released = releaseEditor();
+  const released = releaseControl();
   const releaseRequest = pendingRequests[pendingRequests.length - 1];
   const beforeClaim = pendingRequests.length;
   const acquired = acquireEditor();
@@ -42,16 +46,27 @@
   await released;
   await flushMicrotasks();
   const claimRequest = pendingRequests[pendingRequests.length - 1];
-  check(claimRequest.path === "/api/editor/claim", "Claim follows completed release");
-  mockRespond(claimRequest, { ok: true });
+  check(claimRequest.path === "/api/controller/claim", "Claim follows completed release");
+  mockRespond(claimRequest, { ok: true, token: "new-token" });
   check(await acquired, "Next editor is acquired");
-  check(state.editor.owned, "Late release does not clear new ownership");
+  check(state.editor.owned && state.editor.token === "new-token", "Late release does not clear new ownership");
+  state.sheet.dirty = false;
+  await closeLayer({ force: true });
+  check(state.editor.owned, "Closing a sheet retains app control");
 
   const routed = request("/api/entries", { method: "POST", body: {}, editor: true });
   const routedRequest = pendingRequests[pendingRequests.length - 1];
   check(routedRequest.path === "/api/work/entries", "Work writes use their own API");
+  check(routedRequest.options.headers["X-Page-Id"] === pageId && routedRequest.options.headers["X-Controller-Token"] === "new-token", "Reads and writes carry controller grant");
   mockRespond(routedRequest, {});
   await routed;
+
+  const beforeUncertain = pendingRequests.length;
+  const uncertain = request("/api/entries", { method: "POST", body: {} }).catch(error => error);
+  pendingRequests[pendingRequests.length - 1].reject(new Error("Connection reset"));
+  const uncertainError = await uncertain;
+  check(uncertainError.code === "save_uncertain" && uncertainError.message.includes("may already be saved"), "Connection loss does not imply the save failed");
+  check(pendingRequests.length === beforeUncertain + 1, "Uncertain saves are never retried automatically");
 
   const form = workFormTemplate(null);
   check(form.includes('<select name="category_id" required>'), "Category selection uses existing options");
@@ -73,6 +88,13 @@
   applyLegacyStatusRules();
   check(!legacyNode.elements.priority.disabled && legacyNode.elements.priority.required, "Other legacy statuses require a priority");
   elements.sheetBody.querySelector = savedQuery;
+
+  const denied = request("/api/work/catalog").catch(error => error);
+  const deniedRequest = pendingRequests[pendingRequests.length - 1];
+  mockRespond(deniedRequest, { ok: false, error: { code: "controller_transferred", message: "Taken elsewhere" } }, false);
+  await denied;
+  check(!state.editor.owned && !state.editor.token && !elements.controlGate.hidden && elements.application.inert, "A transferred grant blocks the full app");
+  check(state.entries.length === 0, "Old page clears its visible records");
 
   if (typeof print === "function") print("Frontend checks passed");
   else console.log("Frontend checks passed");

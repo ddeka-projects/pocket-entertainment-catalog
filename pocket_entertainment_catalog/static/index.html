@@ -7,10 +7,19 @@
     <meta name="description" content="A personal catalog for entertainment journeys.">
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/assets/styles.css">
+    <link rel="stylesheet" href="/static/styles.css">
     <title>Pocket Entertainment Catalog</title>
   </head>
   <body>
+    <section id="control-gate" class="control-gate" role="dialog" aria-modal="true" aria-labelledby="control-title">
+      <div class="control-card">
+        <p class="eyebrow">Pocket Entertainment Catalog</p>
+        <h1 id="control-title">Take control</h1>
+        <p id="control-message">Opening the app…</p>
+        <button class="primary-button" id="take-control" type="button">Take Control</button>
+      </div>
+    </section>
+    <div id="application" inert>
     <a class="skip-link" href="#catalog-grid">Skip to catalog</a>
 
     <header class="app-header">
@@ -28,6 +37,7 @@
         <span class="sync-dot" aria-hidden="true"></span>
         <span id="sync-label">Connecting</span>
       </button>
+      <button class="secondary-button" id="release-control" type="button">Release Control</button>
     </header>
 
     <nav class="profile-switcher" aria-label="Catalog profile">
@@ -127,7 +137,8 @@
 
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
 
-    <script src="/assets/work.js" defer></script>
-    <script src="/assets/app.js" defer></script>
+    </div>
+    <script src="/static/work.js" defer></script>
+    <script src="/static/app.js" defer></script>
   </body>
 </html>

@@ -64,7 +64,9 @@ class GitSync:
                     check=False,
                 )
                 if changed.returncode not in {0, 1}:
-                    raise RuntimeError(self._detail(changed, "Could not inspect staged catalog changes."))
+                    raise RuntimeError(
+                        self._detail(changed, "Could not inspect staged catalog changes.")
+                    )
                 if changed.returncode == 0:
                     return self.snapshot()
                 self._run(
@@ -207,7 +209,7 @@ class GitSync:
     @staticmethod
     def _detail(result: subprocess.CompletedProcess[str], fallback: str) -> str:
         text = (result.stderr or result.stdout).strip().splitlines()
-        return (text[-1][:300] if text else fallback)
+        return text[-1][:300] if text else fallback
 
     def _set(self, state: str, message: str) -> SyncSnapshot:
         with self._state_lock:
@@ -216,8 +218,4 @@ class GitSync:
 
     @staticmethod
     def _now() -> str:
-        return (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="seconds")
-            .replace("+00:00", "Z")
-        )
+        return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")

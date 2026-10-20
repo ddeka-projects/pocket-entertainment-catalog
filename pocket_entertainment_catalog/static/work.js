@@ -1,6 +1,6 @@
 "use strict";
 
-// Work uses the shared cards, sheets, editor lease, and request helpers in app.js.
+// Work uses the shared cards, sheets, page controller, and request helpers in app.js.
 // Only this profile asks the server to search/sort/page its local SQLite records.
 function setupProfile() {
   document.querySelector(`[data-profile="${isWork ? "work" : "journey"}"]`).setAttribute("aria-current", "page");
@@ -67,7 +67,7 @@ async function loadWorkCatalog({ quiet = false } = {}) {
       }
     }
   } catch (error) {
-    if (generation !== state.workRequest) return;
+    if (generation !== state.workRequest || !state.editor.owned) return;
     state.loading = false;
     elements.syncLabel.textContent = "Connection issue";
     elements.syncButton.dataset.state = "error";
@@ -99,7 +99,7 @@ function categoryLabel(id) {
 function openWorkStorage() {
   openLayer("storage");
   setSheetHeading("Work", "Local storage");
-  elements.sheetBody.innerHTML = '<p class="form-note">Your work is saved on the computer running this app. Download a backup to keep a separate copy, or export your records as JSON. Both include works in Trash.</p><p class="form-note">The app also keeps the latest seven daily snapshots, captured after the first change each day.</p><div class="detail-actions"><a class="primary-button backup-link" href="/api/work/backup" download>Download backup</a><a class="secondary-button backup-link" href="/api/work/export" download>Export JSON</a></div>';
+  elements.sheetBody.innerHTML = '<p class="form-note">Your work is saved on the computer running this app. Download a backup to keep a separate copy, or export your records as JSON. Both include works in Trash.</p><p class="form-note">The app also keeps the latest seven daily snapshots, captured after the first change each day.</p><div class="detail-actions"><button class="primary-button" type="button" data-action="download-backup">Download backup</button><button class="secondary-button" type="button" data-action="export-json">Export JSON</button></div>';
 }
 
 function renderWorkFilters() {
@@ -242,7 +242,7 @@ async function submitWorkEntry(form) {
 async function openWorkHistory(recordId) {
   if (!await acquireEditor()) return;
   const entry = entryById(recordId);
-  if (!entry) return releaseEditor();
+  if (!entry) return;
   state.sheet.mode = "history";
   state.sheet.dirty = false;
   setSheetHeading(entry.record.work_title, "Correct dates");
@@ -264,7 +264,6 @@ async function submitWorkHistory(form) {
     });
     await upsertEntry(response.entry);
     renderWorkDetail(response.entry);
-    await releaseEditor();
     toast("Lifecycle dates corrected.", "success");
   });
 }
@@ -279,7 +278,6 @@ async function openCategories() {
     renderCategories();
   } catch (error) {
     toast(error.message, "error");
-    await releaseEditor();
   }
 }
 
@@ -336,5 +334,31 @@ async function handleCategoryAction(action, event) {
     mutationError(error);
   } finally {
     state.categoryBusy = false;
+  }
+}
+
+async function downloadWorkFile(kind) {
+  const route = kind === "backup" ? "backup" : "export";
+  try {
+    const response = await fetch(`/api/work/${route}`, {
+      headers: { "X-Page-Id": pageId, "X-Controller-Token": state.editor.token || "" },
+      cache: "no-store", credentials: "same-origin",
+    });
+    if (!response.ok) {
+      const payload = await response.json();
+      const error = new APIError(payload.error?.message || "The download failed.", payload.error?.code, response.status);
+      mutationError(error);
+      return;
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = route === "backup" ? "editing-backup.sqlite3" : "editing-export.json";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    toast(error.message || "The download could not be completed.", "error");
   }
 }

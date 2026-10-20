@@ -949,7 +949,6 @@ a:focus-visible {
 }
 
 .form-note,
-.lease-notice,
 .warning-panel {
   padding: 13px 14px;
   border: 1px solid var(--line);
@@ -960,7 +959,6 @@ a:focus-visible {
   line-height: 1.5;
 }
 
-.lease-notice { border-color: rgba(232, 184, 106, 0.22); }
 .warning-panel { border-color: rgba(238, 138, 134, 0.22); color: #d7a4a1; }
 
 .correction-panel {
@@ -1084,3 +1082,9 @@ body.sheet-open { overflow: hidden; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Only the controlling page can browse or change application data. */
+.control-gate { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #111418; }
+.control-gate[hidden] { display: none; }
+.control-card { width: min(100%, 420px); text-align: center; }
+.control-card p { line-height: 1.6; }

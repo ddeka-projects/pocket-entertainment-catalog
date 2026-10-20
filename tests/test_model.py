@@ -16,14 +16,24 @@ class CatalogModelTests(unittest.TestCase):
     def test_checked_in_catalog_satisfies_the_schema(self) -> None:
         records = [
             json.loads(line)
-            for line in (PROJECT_ROOT / "data" / "catalog.jsonl").read_text(encoding="utf-8").splitlines()
+            for line in (PROJECT_ROOT / "data" / "catalog.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         validated = validate_catalog(records)
 
         self.assertGreaterEqual(len(validated), 310)
         self.assertEqual(310, sum("import" in record for record in validated))
         self.assertEqual(
-            {"anime", "animation", "game", "live_action_movie", "live_action_series", "manga", "visual_novel"},
+            {
+                "anime",
+                "animation",
+                "game",
+                "live_action_movie",
+                "live_action_series",
+                "manga",
+                "visual_novel",
+            },
             {record["media_type"] for record in validated},
         )
 

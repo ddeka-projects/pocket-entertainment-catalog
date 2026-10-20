@@ -1,6 +1,7 @@
-from pocket_entertainment_catalog.config import load_settings
-from pocket_entertainment_catalog.server import run
+"""Convenient foreground entry point."""
+
+from pocket_entertainment_catalog.app import main
 
 
 if __name__ == "__main__":
-    run(load_settings())
+    raise SystemExit(main())

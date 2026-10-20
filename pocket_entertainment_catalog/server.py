@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+import logging
+
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import mimetypes
@@ -14,7 +17,9 @@ from . import __version__
 from .api import APIResponse, CatalogAPI, MAX_JSON_BODY, RequestError
 from .config import Settings
 from .git_sync import GitSync
-from .lease import EditorLease
+from .health import make_health
+from .controller import ControllerOwnership
+from .process_lock import ProcessLock
 from .service import CatalogService
 from .storage import CatalogStore
 from .work_service import WorkService
@@ -24,35 +29,44 @@ from .work_storage import WorkStore
 STATIC_ROUTES = {
     "/": "index.html",
     "/index.html": "index.html",
-    "/assets/app.js": "app.js",
-    "/assets/work.js": "work.js",
-    "/assets/styles.css": "styles.css",
+    "/static/app.js": "app.js",
+    "/static/work.js": "work.js",
+    "/static/styles.css": "styles.css",
     "/manifest.webmanifest": "manifest.webmanifest",
     "/icon.svg": "icon.svg",
 }
 
 
 class CatalogHTTPServer(ThreadingHTTPServer):
-    daemon_threads = True
+    daemon_threads = False
     allow_reuse_address = True
 
 
 class PocketCatalogServer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.store = CatalogStore(settings.catalog_path)
-        self.lease = EditorLease()
-        self.git_sync = GitSync(settings.repository_path, settings.catalog_path)
-        self.service = CatalogService(self.store, self.lease, self.git_sync)
-        self.work_store = WorkStore(settings.work_path or settings.catalog_path.parent / "editing.sqlite3")
-        self.work_service = WorkService(self.work_store)
-        self.public_host = settings.public_host or _discover_lan_ipv4() or "127.0.0.1"
-        allowed_hosts = {settings.host, self.public_host}
-        self.api = CatalogAPI(self.service, allowed_hosts=allowed_hosts, work_service=self.work_service)
-        self._server = CatalogHTTPServer(
-            (settings.host, settings.port),
-            self._handler(),
-        )
+        self._resources = ExitStack()
+        try:
+            work_path = settings.work_path or settings.catalog_path.parent / "editing.sqlite3"
+            # Guard both independent stores, even when custom paths overlap
+            # a different checkout's configuration.
+            for path in sorted({settings.catalog_path.resolve(), work_path.resolve()}):
+                self._resources.enter_context(ProcessLock(path))
+            self.store = CatalogStore(settings.catalog_path)
+            self.controller = ControllerOwnership()
+            self.git_sync = GitSync(settings.repository_path, settings.catalog_path)
+            self.service = CatalogService(self.store, self.controller, self.git_sync)
+            self.work_store = WorkStore(work_path)
+            self.work_service = WorkService(self.work_store)
+            self.public_host = settings.public_host or _discover_lan_ipv4() or "127.0.0.1"
+            allowed_hosts = {settings.host, self.public_host}
+            self.api = CatalogAPI(
+                self.service, allowed_hosts=allowed_hosts, work_service=self.work_service
+            )
+            self._server = CatalogHTTPServer((settings.host, settings.port), self._handler())
+        except BaseException:
+            self._resources.close()
+            raise
         self._serving_thread_id: int | None = None
 
     @property
@@ -70,12 +84,10 @@ class PocketCatalogServer:
         # BaseServer.shutdown() deadlocks when called by the thread currently
         # running serve_forever (notably after Ctrl+C). Only request shutdown
         # when another thread is responsible for the serving loop.
-        if (
-            self._serving_thread_id is not None
-            and self._serving_thread_id != threading.get_ident()
-        ):
+        if self._serving_thread_id is not None and self._serving_thread_id != threading.get_ident():
             self._server.shutdown()
         self._server.server_close()
+        self._resources.close()
 
     def _handler(self) -> type[BaseHTTPRequestHandler]:
         api = self.api
@@ -86,11 +98,25 @@ class PocketCatalogServer:
             sys_version = ""
             protocol_version = "HTTP/1.1"
 
+            def setup(self) -> None:
+                super().setup()
+                self.connection.settimeout(15)
+
             def do_GET(self) -> None:  # noqa: N802
                 if self._reject_nonlocal():
                     return
-                if urlsplit(self.path).path.startswith("/api/"):
-                    self._send(api.handle("GET", self.path, self.headers, client_address=self.client_address[0]))
+                if urlsplit(self.path).path == "/health":
+                    try:
+                        api.validate_request(self.headers, mutating=False)
+                        self._send(api._json(200, make_health()))
+                    except RequestError as error:
+                        self._send(api._exception(error))
+                elif urlsplit(self.path).path.startswith("/api/"):
+                    self._send(
+                        api.handle(
+                            "GET", self.path, self.headers, client_address=self.client_address[0]
+                        )
+                    )
                 else:
                     self._send_static(static_root)
 
@@ -145,26 +171,43 @@ class PocketCatalogServer:
                     return
                 source = root / filename
                 if source.is_symlink() or not source.is_file():
-                    self._send(api._error(500, "asset_error", "The web application asset is unavailable."))
+                    self._send(
+                        api._error(500, "asset_error", "The web application asset is unavailable.")
+                    )
                     return
                 try:
                     body = source.read_bytes()
                 except OSError:
-                    self._send(api._error(500, "asset_error", "The web application asset could not be read."))
+                    self._send(
+                        api._error(
+                            500, "asset_error", "The web application asset could not be read."
+                        )
+                    )
                     return
-                mime = {
-                    ".js": "text/javascript; charset=utf-8",
-                    ".css": "text/css; charset=utf-8",
-                    ".html": "text/html; charset=utf-8",
-                    ".webmanifest": "application/manifest+json",
-                    ".svg": "image/svg+xml",
-                }.get(source.suffix.lower()) or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+                mime = (
+                    {
+                        ".js": "text/javascript; charset=utf-8",
+                        ".css": "text/css; charset=utf-8",
+                        ".html": "text/html; charset=utf-8",
+                        ".webmanifest": "application/manifest+json",
+                        ".svg": "image/svg+xml",
+                    }.get(source.suffix.lower())
+                    or mimetypes.guess_type(source.name)[0]
+                    or "application/octet-stream"
+                )
                 self._send(
                     APIResponse(
                         200,
                         (
                             ("Content-Type", mime),
-                            ("Cache-Control", "no-cache" if source.suffix in {".html", ".js", ".css"} else "public, max-age=3600"),
+                            (
+                                "Cache-Control",
+                                (
+                                    "no-cache"
+                                    if source.suffix in {".html", ".js", ".css"}
+                                    else "public, max-age=3600"
+                                ),
+                            ),
                         ),
                         body,
                     )
@@ -233,10 +276,11 @@ def _discover_lan_ipv4() -> str | None:
 
 def run(settings: Settings) -> None:
     server = PocketCatalogServer(settings)
-    print(f"Pocket Entertainment Catalog {__version__}")
-    print(f"Catalog: {settings.catalog_path}")
-    print(f"Work: {server.work_store.path}")
-    print(f"Open: {server.url}")
+    logger = logging.getLogger(__name__)
+    logger.info("Pocket Entertainment Catalog %s", __version__)
+    logger.info("Catalog: %s", settings.catalog_path)
+    logger.info("Work: %s", server.work_store.path)
+    logger.info("Open: %s", server.url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

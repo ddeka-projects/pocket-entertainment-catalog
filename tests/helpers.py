@@ -57,8 +57,7 @@ def sample_record(**overrides: Any) -> dict[str, Any]:
 
 def write_catalog(path: Path, records: list[dict[str, Any]]) -> None:
     payload = "".join(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-        for record in records
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(payload, encoding="utf-8")

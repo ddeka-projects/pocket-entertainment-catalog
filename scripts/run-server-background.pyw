@@ -1,36 +1,26 @@
-"""Console-free Windows entry point used by the scheduled task."""
+"""Console-free scheduled entry point; the task tracks this server process."""
 
-from __future__ import annotations
-
-from datetime import datetime
 import os
 from pathlib import Path
 import sys
-import traceback
 
+root = Path(__file__).resolve().parents[1]
+os.chdir(root)
+sys.path.insert(0, str(root))
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-LOG_DIRECTORY = PROJECT_ROOT / ".tmp"
-LOG_PATH = LOG_DIRECTORY / "server.log"
+from pocket_entertainment_catalog.logging_setup import configure_logging, redirect_standard_streams
 
-
-def main() -> None:
-    LOG_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    with LOG_PATH.open("a", encoding="utf-8", buffering=1) as log:
-        sys.stdout = log
-        sys.stderr = log
-        os.chdir(PROJECT_ROOT)
-        sys.path.insert(0, str(PROJECT_ROOT))
-        print(f"\n[{datetime.now().astimezone().isoformat(timespec='seconds')}] Background startup")
-        try:
-            from pocket_entertainment_catalog.config import load_settings
-            from pocket_entertainment_catalog.server import run
-
-            run(load_settings())
-        except BaseException:
-            traceback.print_exc()
-            raise
-
-
-if __name__ == "__main__":
-    main()
+configure_logging(console=False)
+redirect_standard_streams()
+try:
+    from pocket_entertainment_catalog.app import main
+    raise SystemExit(main())
+except SystemExit:
+    raise
+except BaseException:
+    import logging
+    logging.getLogger(__name__).exception("Background server failed")
+    raise SystemExit(1)
+finally:
+    sys.stdout.flush()
+    sys.stderr.flush()

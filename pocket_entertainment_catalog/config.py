@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
+from typing import Mapping
+
+from .env import load_env
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,30 +23,48 @@ class Settings:
     work_path: Path | None = None
 
 
-def load_settings() -> Settings:
-    values = _dotenv(PROJECT_ROOT / ".env")
+def load_settings(
+    env_file: Path | str | None = None, *, environ: Mapping[str, str] | None = None
+) -> Settings:
+    values = load_env(
+        PROJECT_ROOT / ".env" if env_file is None else Path(env_file), environ=environ
+    )
+    for suffix in ("HOST", "PORT", "PUBLIC_HOST", "DATA", "WORK_DATA"):
+        previous = f"POCKET_CATALOG_{suffix}"
+        current = f"POCKET_ENTERTAINMENT_CATALOG_{suffix}"
+        if previous in values and current not in values:
+            raise ValueError(f"Rename {previous} to {current} in your configuration.")
 
     def setting(name: str, default: str = "") -> str:
-        return os.environ.get(name, values.get(name, default)).strip()
+        return values.get(f"POCKET_ENTERTAINMENT_CATALOG_{name}", default).strip()
 
-    host = setting("POCKET_CATALOG_HOST", "0.0.0.0")
-    public_host = setting("POCKET_CATALOG_PUBLIC_HOST") or None
+    host = setting("HOST", "0.0.0.0")
+    if not host or any(character.isspace() for character in host):
+        raise ValueError("POCKET_ENTERTAINMENT_CATALOG_HOST must be a hostname or IP address.")
+    public_host = setting("PUBLIC_HOST") or None
     try:
-        port = int(setting("POCKET_CATALOG_PORT", "8766"))
+        port = int(setting("PORT", "8766"))
     except ValueError as error:
-        raise ValueError("POCKET_CATALOG_PORT must be an integer.") from error
+        raise ValueError("POCKET_ENTERTAINMENT_CATALOG_PORT must be an integer.") from error
     if not 1 <= port <= 65535:
-        raise ValueError("POCKET_CATALOG_PORT must be between 1 and 65535.")
+        raise ValueError("POCKET_ENTERTAINMENT_CATALOG_PORT must be between 1 and 65535.")
 
-    catalog_setting = setting("POCKET_CATALOG_DATA", "data/catalog.jsonl")
+    catalog_setting = setting("DATA", "data/catalog.jsonl")
+    if not catalog_setting:
+        raise ValueError("POCKET_ENTERTAINMENT_CATALOG_DATA must be a file path.")
     catalog_path = Path(catalog_setting)
     if not catalog_path.is_absolute():
         catalog_path = PROJECT_ROOT / catalog_path
 
-    work_path = Path(setting("POCKET_CATALOG_WORK_DATA", "data/editing.sqlite3"))
+    work_setting = setting("WORK_DATA", "data/editing.sqlite3")
+    if not work_setting:
+        raise ValueError("POCKET_ENTERTAINMENT_CATALOG_WORK_DATA must be a file path.")
+    work_path = Path(work_setting)
     if not work_path.is_absolute():
         work_path = PROJECT_ROOT / work_path
 
+    if catalog_path.resolve() == work_path.resolve():
+        raise ValueError("Journey and Work must use different data files.")
     return Settings(
         host=host,
         port=port,
@@ -52,25 +72,5 @@ def load_settings() -> Settings:
         catalog_path=catalog_path.resolve(),
         static_path=(Path(__file__).resolve().parent / "static").resolve(),
         repository_path=PROJECT_ROOT.resolve(),
-        work_path=work_path.absolute(),
+        work_path=work_path.resolve(),
     )
-
-
-def _dotenv(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    result: dict[str, str] = {}
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise ValueError(f"Invalid .env entry on line {line_number}.")
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if value[:1] == value[-1:] and value[:1] in {"'", '"'}:
-            value = value[1:-1]
-        result[key] = value
-    return result
-

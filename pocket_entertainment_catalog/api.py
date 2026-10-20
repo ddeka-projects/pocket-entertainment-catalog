@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import ipaddress
 import json
+import logging
 import re
 import socket
 from pathlib import Path
@@ -12,7 +13,7 @@ import tempfile
 from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .lease import LeaseConflict, LeaseError, LeaseExpired
+from .controller import ControllerError
 from .model import ModelError
 from .service import CatalogService, DeletedEntry, InvalidRequest, InvalidTransition
 from .storage import (
@@ -89,87 +90,89 @@ class CatalogAPI:
             target_parts = urlsplit(target)
             segments = self._segments(target_parts.path)
 
-            if segments[:2] == ["api", "work"] and self.work_service is not None:
-                return self._work_route(method, segments[2:], target_parts.query, headers, body)
-
             if method == "GET" and segments == ["api", "status"]:
                 return self._json(200, {"server": "available"})
-
-            if method == "GET" and segments == ["api", "state"]:
-                return self._json(200, self.service.catalog_state())
-
-            if segments[:2] == ["api", "editor"]:
-                return self._editor_route(method, segments, headers, body)
-
-            if method == "GET" and segments == ["api", "catalog"]:
-                query = parse_qs(target_parts.query, keep_blank_values=True)
-                unknown = set(query) - {"deleted"}
-                if unknown:
-                    raise RequestError("Catalog query contains unknown parameters.")
-                deleted = query.get("deleted", ["exclude"])
-                if len(deleted) != 1 or deleted[0] not in {"exclude", "include"}:
-                    raise RequestError("deleted must be exclude or include.")
-                return self._json(
-                    200,
-                    self.service.catalog(include_deleted=deleted[0] == "include"),
-                )
-
-            if method == "GET" and len(segments) == 3 and segments[:2] == ["api", "entries"]:
-                return self._json(200, self.service.entry(segments[2]))
-
-            if method == "GET" and segments == ["api", "sync"]:
-                return self._json(200, {"sync": self.service.git_sync.snapshot().as_dict()})
-
-            if method == "POST" and segments == ["api", "entries"]:
-                self._authorize_editor(headers)
-                return self._json(201, self.service.create(self._json_body(headers, body)))
-
-            is_entry = len(segments) >= 3 and segments[:2] == ["api", "entries"]
-            if is_entry:
-                self._authorize_editor(headers)
-                record_id = segments[2]
-                expected_etag = self._required_header(headers, "If-Match")
-                payload = self._json_body(headers, body) if method in {"POST", "PATCH", "PUT"} else {}
-                if method == "PATCH" and len(segments) == 3:
-                    return self._json(
-                        200,
-                        self.service.update(record_id, payload, expected_etag=expected_etag),
-                    )
-                if method == "DELETE" and len(segments) == 3:
-                    if body:
-                        raise RequestError("DELETE request must not contain a body.")
-                    return self._json(
-                        200,
-                        self.service.delete(record_id, expected_etag=expected_etag),
-                    )
-                if method == "POST" and segments[3:] == ["transition"]:
-                    return self._json(
-                        200,
-                        self.service.transition(record_id, payload, expected_etag=expected_etag),
-                    )
-                if method == "PUT" and segments[3:] == ["history"]:
-                    return self._json(
-                        200,
-                        self.service.correct_history(record_id, payload, expected_etag=expected_etag),
-                    )
-                if method == "POST" and segments[3:] == ["restore"]:
-                    if payload:
-                        raise RequestError("Restore request body must be empty.")
-                    return self._json(
-                        200,
-                        self.service.restore(record_id, expected_etag=expected_etag),
-                    )
-
-            if method == "POST" and segments == ["api", "sync", "retry"]:
-                self._authorize_editor(headers)
-                payload = self._json_body(headers, body)
-                if payload:
-                    raise RequestError("Sync retry body must be empty.")
-                return self._json(200, self.service.retry_sync())
-
-            return self._error(404, "not_found", "The requested API route does not exist.")
+            if segments[:2] == ["api", "controller"]:
+                return self._controller_route(method, segments, headers, body)
+            with self.service.controller.operation(
+                self._header(headers, "X-Page-Id"),
+                self._header(headers, "X-Controller-Token"),
+            ):
+                return self._dispatch(method, segments, target_parts.query, headers, body)
         except Exception as error:
             return self._exception(error)
+
+    def _dispatch(self, method, segments, query, headers, body) -> APIResponse:
+        if segments[:2] == ["api", "work"] and self.work_service is not None:
+            return self._work_route(method, segments[2:], query, headers, body)
+
+        if method == "GET" and segments == ["api", "state"]:
+            return self._json(200, self.service.catalog_state())
+
+        if method == "GET" and segments == ["api", "catalog"]:
+            query = parse_qs(query, keep_blank_values=True)
+            unknown = set(query) - {"deleted"}
+            if unknown:
+                raise RequestError("Catalog query contains unknown parameters.")
+            deleted = query.get("deleted", ["exclude"])
+            if len(deleted) != 1 or deleted[0] not in {"exclude", "include"}:
+                raise RequestError("deleted must be exclude or include.")
+            return self._json(
+                200,
+                self.service.catalog(include_deleted=deleted[0] == "include"),
+            )
+
+        if method == "GET" and len(segments) == 3 and segments[:2] == ["api", "entries"]:
+            return self._json(200, self.service.entry(segments[2]))
+
+        if method == "GET" and segments == ["api", "sync"]:
+            return self._json(200, {"sync": self.service.git_sync.snapshot().as_dict()})
+
+        if method == "POST" and segments == ["api", "entries"]:
+            return self._json(201, self.service.create(self._json_body(headers, body)))
+
+        is_entry = len(segments) >= 3 and segments[:2] == ["api", "entries"]
+        if is_entry:
+            record_id = segments[2]
+            expected_etag = self._required_header(headers, "If-Match")
+            payload = self._json_body(headers, body) if method in {"POST", "PATCH", "PUT"} else {}
+            if method == "PATCH" and len(segments) == 3:
+                return self._json(
+                    200,
+                    self.service.update(record_id, payload, expected_etag=expected_etag),
+                )
+            if method == "DELETE" and len(segments) == 3:
+                if body:
+                    raise RequestError("DELETE request must not contain a body.")
+                return self._json(
+                    200,
+                    self.service.delete(record_id, expected_etag=expected_etag),
+                )
+            if method == "POST" and segments[3:] == ["transition"]:
+                return self._json(
+                    200,
+                    self.service.transition(record_id, payload, expected_etag=expected_etag),
+                )
+            if method == "PUT" and segments[3:] == ["history"]:
+                return self._json(
+                    200,
+                    self.service.correct_history(record_id, payload, expected_etag=expected_etag),
+                )
+            if method == "POST" and segments[3:] == ["restore"]:
+                if payload:
+                    raise RequestError("Restore request body must be empty.")
+                return self._json(
+                    200,
+                    self.service.restore(record_id, expected_etag=expected_etag),
+                )
+
+        if method == "POST" and segments == ["api", "sync", "retry"]:
+            payload = self._json_body(headers, body)
+            if payload:
+                raise RequestError("Sync retry body must be empty.")
+            return self._json(200, self.service.retry_sync())
+
+        return self._error(404, "not_found", "The requested API route does not exist.")
 
     def _work_route(self, method, segments, query, headers, body) -> APIResponse:
         work = self.work_service
@@ -187,19 +190,29 @@ class CatalogAPI:
             with tempfile.TemporaryDirectory() as directory:
                 destination = Path(directory) / "editing.sqlite3"
                 work.store.backup(destination)
-                return APIResponse(200, (("Content-Type", "application/vnd.sqlite3"),
-                    ("Content-Disposition", 'attachment; filename="editing-backup.sqlite3"'),
-                    ("Cache-Control", "no-store")), destination.read_bytes())
+                return APIResponse(
+                    200,
+                    (
+                        ("Content-Type", "application/vnd.sqlite3"),
+                        ("Content-Disposition", 'attachment; filename="editing-backup.sqlite3"'),
+                        ("Cache-Control", "no-store"),
+                    ),
+                    destination.read_bytes(),
+                )
         if method == "GET" and segments == ["export"]:
-            return APIResponse(200, (("Content-Type", "application/json; charset=utf-8"),
-                ("Content-Disposition", 'attachment; filename="editing-export.json"'),
-                ("Cache-Control", "no-store")),
-                json.dumps(work.store.export(), ensure_ascii=False, indent=2).encode("utf-8"))
+            return APIResponse(
+                200,
+                (
+                    ("Content-Type", "application/json; charset=utf-8"),
+                    ("Content-Disposition", 'attachment; filename="editing-export.json"'),
+                    ("Cache-Control", "no-store"),
+                ),
+                json.dumps(work.store.export(), ensure_ascii=False, indent=2).encode("utf-8"),
+            )
         if method == "GET" and len(segments) == 2 and segments[0] == "entries":
             return self._json(200, work.entry(segments[1]))
         if method not in {"POST", "PATCH", "PUT", "DELETE"}:
             return self._error(404, "not_found", "The requested Work route does not exist.")
-        self._authorize_editor(headers)
         if method == "POST" and segments == ["entries"]:
             return self._json(201, work.create(self._json_body(headers, body)))
         if method == "POST" and segments == ["legacy"]:
@@ -215,11 +228,21 @@ class CatalogAPI:
                 if method == "DELETE":
                     if body:
                         raise RequestError("DELETE must not contain a body.")
-                    return self._json(200, work.store.change_category(category_id=segments[1], expected_etag=etag, delete=True))
+                    return self._json(
+                        200,
+                        work.store.change_category(
+                            category_id=segments[1], expected_etag=etag, delete=True
+                        ),
+                    )
                 payload = self._json_body(headers, body)
                 if set(payload) != {"name"}:
                     raise RequestError("Category requests require exactly a name.")
-                return self._json(200, work.store.change_category(payload["name"], category_id=segments[1], expected_etag=etag))
+                return self._json(
+                    200,
+                    work.store.change_category(
+                        payload["name"], category_id=segments[1], expected_etag=etag
+                    ),
+                )
         if len(segments) >= 2 and segments[0] == "entries":
             etag = self._required_header(headers, "If-Match")
             record_id = segments[1]
@@ -239,7 +262,9 @@ class CatalogAPI:
                     raise RequestError("Restore request body must be empty.")
                 return self._json(200, work.restore(record_id, expected_etag=etag))
             if operation:
-                return self._json(200, operation(record_id, self._json_body(headers, body), expected_etag=etag))
+                return self._json(
+                    200, operation(record_id, self._json_body(headers, body), expected_etag=etag)
+                )
         return self._error(404, "not_found", "The requested Work route does not exist.")
 
     def validate_peer(self, client_address: str) -> None:
@@ -270,40 +295,26 @@ class CatalogAPI:
                 if self._authority(parsed.netloc) != self._authority(host_header):
                     raise ForbiddenRequest("Cross-origin mutations are not allowed.")
 
-    def _editor_route(
-        self,
-        method: str,
-        segments: list[str],
-        headers: Mapping[str, str],
-        body: bytes,
-    ) -> APIResponse:
+    def _controller_route(self, method, segments, headers, body) -> APIResponse:
         if method != "POST" or len(segments) != 3:
             return self._error(404, "not_found", "The requested API route does not exist.")
         payload = self._json_body(headers, body)
-        if set(payload) != {"client_id", "page_id"}:
-            raise RequestError("Editor request requires exactly client_id and page_id.")
-        client_id = self._identity(payload.get("client_id"), "client_id")
-        page_id = self._identity(payload.get("page_id"), "page_id")
         action = segments[2]
+        expected = {"page_id", "token"} if action == "release" else {"page_id"}
+        if set(payload) != expected:
+            raise RequestError("Controller request fields are invalid.")
+        page_id = payload.get("page_id")
+        controller = self.service.controller
         if action == "claim":
-            snapshot = self.service.editor_lease.claim(client_id, page_id)
-        elif action == "heartbeat":
-            snapshot = self.service.editor_lease.heartbeat(client_id, page_id)
+            result = controller.claim(page_id)
+        elif action == "takeover":
+            result = controller.takeover(page_id)
         elif action == "release":
-            self.service.editor_lease.release(client_id, page_id)
-            snapshot = self.service.editor_lease.snapshot()
+            controller.release(page_id, payload.get("token"))
+            result = controller.snapshot()
         else:
             return self._error(404, "not_found", "The requested API route does not exist.")
-        return self._json(
-            200,
-            {"editor": {"claimed": snapshot.claimed, "expires_at": snapshot.expires_at}},
-        )
-
-    def _authorize_editor(self, headers: Mapping[str, str]) -> None:
-        self.service.editor_lease.authorize(
-            self._required_header(headers, "X-Catalog-Client"),
-            self._required_header(headers, "X-Catalog-Page"),
-        )
+        return self._json(200, result)
 
     def _json_body(self, headers: Mapping[str, str], body: bytes) -> dict[str, Any]:
         content_type = self._header(headers, "Content-Type").split(";", 1)[0].strip().lower()
@@ -373,26 +384,29 @@ class CatalogAPI:
         return parsed.hostname.casefold().rstrip("."), port
 
     def _exception(self, error: Exception) -> APIResponse:
-        if isinstance(error, (RequestError, InvalidRequest, ModelError, LeaseError)):
-            status = getattr(error, "status", 400)
-            if isinstance(error, LeaseConflict):
-                status = 423
-            elif isinstance(error, LeaseExpired):
-                status = 409
-            return self._error(status, getattr(error, "code", "bad_request"), str(error))
+        if isinstance(error, (RequestError, InvalidRequest, ModelError, ControllerError)):
+            return self._error(
+                getattr(error, "status", 400), getattr(error, "code", "bad_request"), str(error)
+            )
         if isinstance(error, CatalogNotFound):
             return self._error(404, error.code, str(error))
         if isinstance(error, CatalogConflict):
             return self._error(412, error.code, str(error))
-        if isinstance(error, (DeletedEntry, InvalidTransition, CatalogChangedExternally, CatalogBusy)):
+        if isinstance(
+            error, (DeletedEntry, InvalidTransition, CatalogChangedExternally, CatalogBusy)
+        ):
             return self._error(409, getattr(error, "code", "conflict"), str(error))
         if isinstance(error, StorageError):
+            logging.getLogger(__name__).exception("A storage operation failed", exc_info=error)
             return self._error(500, error.code, "The catalog could not be saved safely.")
+        logging.getLogger(__name__).exception("An API operation failed", exc_info=error)
         return self._error(500, "internal_error", "The server could not complete the request.")
 
     @staticmethod
     def _json(status: int, payload: Mapping[str, Any]) -> APIResponse:
-        body = json.dumps({"ok": True, **payload}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(
+            {"ok": True, **payload}, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
         return APIResponse(
             status,
             (("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")),
