@@ -24,7 +24,7 @@ function setupProfile() {
   elements.syncButton.dataset.state = "unavailable";
   elements.syncButton.title = "Work changes are saved on the server.";
   elements.syncButton.setAttribute("aria-label", "Work storage status");
-  for (const [id, field] of [["work-category", "categoryFilter"], ["work-kind", "kindFilter"], ["work-priority", "priorityFilter"]]) {
+  for (const [id, field] of [["work-category", "categoryFilter"], ["work-kind", "kindFilter"], ["work-priority", "priorityFilter"], ["work-source", "sourceOngoingFilter"]]) {
     document.querySelector(`#${id}`).addEventListener("change", (event) => {
       state[field] = event.target.value;
       refreshWorkFilters();
@@ -45,7 +45,7 @@ async function loadWorkCatalog({ quiet = false } = {}) {
   if (!quiet) renderLoading();
   const params = new URLSearchParams({
     status: state.statusFilter, category: state.categoryFilter, kind: state.kindFilter,
-    priority: state.priorityFilter, search: state.search, sort: state.sort,
+    priority: state.priorityFilter, source_ongoing: state.sourceOngoingFilter, search: state.search, sort: state.sort,
     direction: state.sortDirections[state.sort], page: String(state.page), page_size: "48",
   });
   try {
@@ -113,6 +113,7 @@ function renderWorkFilters() {
   category.value = state.categoryFilter;
   document.querySelector("#work-kind").value = state.kindFilter;
   document.querySelector("#work-priority").value = state.priorityFilter;
+  document.querySelector("#work-source").value = state.sourceOngoingFilter;
 }
 
 function renderWork() {
@@ -142,7 +143,7 @@ function workCardTemplate({ record }) {
       <span class="card-topline"><span class="media-label">${escapeHTML(categoryLabel(record.category_id))}</span><span class="status-label">${record.deleted_at ? "Deleted" : statusInfo(record.status).label}</span></span>
       <h2>${escapeHTML(record.work_title)}</h2>
       ${record.unit_title ? `<span class="unit-title">${escapeHTML(record.unit_title)}</span>` : ""}
-      <span class="work-badges"><span>${titleCase(record.kind)}</span>${record.priority ? `<span class="priority-badge" data-priority="${record.priority}">${titleCase(record.priority)} priority</span>` : ""}</span>
+      <span class="work-badges"><span>${titleCase(record.kind)}</span>${record.priority ? `<span class="priority-badge" data-priority="${record.priority}">${titleCase(record.priority)} priority</span>` : ""}${record.kind === "project" && record.source_ongoing ? '<span class="source-ongoing-badge">Source Ongoing</span>' : ""}</span>
       <span class="card-footer"><span>${escapeHTML([cardDate(record), record.release_year].filter(Boolean).join(" · ") || "Date unknown")}</span></span>
     </span></button>`;
 }
@@ -156,7 +157,8 @@ function renderWorkDetail(entry) {
   setSheetHeading(record.unit_title || titleCase(record.kind), record.work_title);
   const chips = [record.deleted_at ? "Deleted" : statusInfo(record.status).label,
     categoryLabel(record.category_id), titleCase(record.kind),
-    record.priority ? `${titleCase(record.priority)} priority` : null, record.release_year].filter(Boolean);
+    record.priority ? `${titleCase(record.priority)} priority` : null,
+    record.kind === "project" && record.source_ongoing ? "Source Ongoing" : null, record.release_year].filter(Boolean);
   const timeline = Object.entries(DATE_LABELS).map(([field, label]) =>
     `<div class="timeline-row${record.dates[field] ? " is-known" : ""}"><span class="timeline-dot" aria-hidden="true"></span><span>${label}</span><span class="timeline-date${record.dates[field] ? "" : " is-unknown"}">${record.dates[field] ? escapeHTML(formatDate(record.dates[field])) : "Unknown"}</span></div>`).join("");
   const transitions = NEXT_STATUS[record.status].map((target) =>
@@ -200,6 +202,14 @@ function applyLegacyStatusRules() {
   if (investigate) form.elements.priority.value = "";
 }
 
+function applyWorkKindRules(form) {
+  const project = form.elements.kind.value === "project";
+  const source = form.elements.source_ongoing;
+  source.closest(".source-field").hidden = !project;
+  source.disabled = !project;
+  if (!project) source.checked = false;
+}
+
 function workFormTemplate(record, { legacy = false } = {}) {
   const categories = state.categories.map((c) => `<option value="${escapeAttribute(c.id)}"${c.id === (record?.category_id || "uncategorized") ? " selected" : ""}>${escapeHTML(c.name)}</option>`).join("");
   const introduction = legacy
@@ -211,6 +221,7 @@ function workFormTemplate(record, { legacy = false } = {}) {
       <label class="field full"><span>Work unit</span><input name="unit_title" maxlength="200" placeholder="Season 1, Launch Trailer, a video name…" value="${escapeAttribute(record?.unit_title || "")}"><small>Optional scope within a title, creator, or account.</small></label>
       <label class="field"><span>Kind</span><select name="kind" required><option value="project">Project</option><option value="task"${record?.kind === "task" ? " selected" : ""}>Task</option></select></label>
       <label class="field"><span>Category</span><select name="category_id" required>${categories}</select><small>Categories are managed separately.</small></label>
+      <label class="field full source-field"${record?.kind === "task" ? " hidden" : ""}><span>Source material</span><span class="source-toggle"><input name="source_ongoing" type="checkbox"${record?.kind === "task" ? " disabled" : record?.source_ongoing ? " checked" : ""}><span>Source Ongoing</span></span><small>The source material is still being released. You can change this after finishing your editing work.</small></label>
       ${legacy ? `<label class="field"><span>Existing status</span><select name="status" required>${state.statuses.map((s) => `<option value="${s}"${s === "completed" ? " selected" : ""}>${statusInfo(s).label}</option>`).join("")}</select></label>` : ""}
       ${legacy || (record && record.status !== "investigate") ? `<label class="field"><span>Priority</span>${workPrioritySelect(record?.priority || null)}${legacy ? '<small>Investigate has no priority; other statuses require High or Low.</small>' : ""}</label>` : ""}
       <label class="field"><span>Release year</span><input name="release_year" type="number" inputmode="numeric" min="1000" max="9999" placeholder="Optional" value="${record?.release_year ?? ""}"></label>
@@ -224,6 +235,7 @@ async function submitWorkEntry(form) {
   const existing = state.sheet.entryId ? entryById(state.sheet.entryId) : null;
   const legacy = !existing && form.dataset.legacy === "true";
   const payload = Object.fromEntries(["work_title", "unit_title", "kind", "category_id", "release_year", "notes"].map((f) => [f, data.get(f) || null]));
+  payload.source_ongoing = payload.kind === "project" && data.get("source_ongoing") === "on";
   if (existing && existing.record.status !== "investigate") payload.priority = data.get("priority");
   if (legacy) {
     payload.status = data.get("status");

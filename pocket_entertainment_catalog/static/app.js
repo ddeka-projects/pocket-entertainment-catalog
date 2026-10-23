@@ -100,6 +100,7 @@ const state = {
   categoryFilter: "all",
   kindFilter: "all",
   priorityFilter: "all",
+  sourceOngoingFilter: "all",
   page: 1,
   pages: 1,
   total: 0,
@@ -1106,6 +1107,7 @@ elements.sheetBody.addEventListener("submit", async (event) => {
 
 elements.sheetBody.addEventListener("change", (event) => {
   if (isWork && event.target.matches('#entry-form[data-legacy="true"] [name=status]')) applyLegacyStatusRules();
+  if (isWork && event.target.matches('#entry-form [name=kind]')) applyWorkKindRules(event.target.form);
   if (event.target.matches("#history-form [name=status]")) applyHistoryStatusRules();
 });
 
@@ -1119,7 +1121,7 @@ elements.clearFilters.addEventListener("click", () => {
   state.search = "";
   elements.search.value = "";
   if (isWork) {
-    state.categoryFilter = state.kindFilter = state.priorityFilter = "all";
+    state.categoryFilter = state.kindFilter = state.priorityFilter = state.sourceOngoingFilter = "all";
     return refreshWorkFilters();
   }
   renderFilters();

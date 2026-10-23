@@ -12,15 +12,19 @@ Open **Work** to add a project or task. Only the reserved **Uncategorized** cate
 
 Works follow `Investigate → Planned → Ongoing ⇄ Paused → Completed / Discontinued`. A paused work must resume before finishing. Moving to Planned requires an explicit **High** or **Low** priority. Investigate has no priority; every later status retains a required, editable priority. Works have optional release years and notes, without ratings.
 
+For a project whose manga, anime, or other source material is still being released, enable **Source Ongoing** in **Add work** or **Edit details**. It defaults to off and remains editable in every status, including Completed and Discontinued. Enabled projects show a subtle card indicator. The **Source** filter finds projects with or without the flag alongside the other Work filters. Tasks do not use this flag; changing a project to a task clears it. This setting does not change lifecycle status, priority, or tasks.
+
 Use **Categories** to create, rename, or delete categories. Names are unique after Unicode, whitespace, and case normalization. Work forms only select existing categories. Uncategorized is the default and cannot be renamed or deleted. Deleting another category atomically moves its works, including Trash, to Uncategorized.
 
 Lifecycle dates use Journey's chronology and backdating confirmation rules. **Correct dates** adjusts milestones for the current status without bypassing sequential transitions. Normal records cannot erase their entire lifecycle history.
 
 To enter historical work yourself, open **Add work → Adding old work? Add legacy work**. Select its existing status and a High/Low priority (except Investigate, which has no priority). All four lifecycle dates are saved as unknown, with the record explicitly marked as legacy. You can fill dates later using **Correct dates**. Ordinary new works still start in Investigate with today's date and progress sequentially; a legacy work's subsequent transitions also follow that progression. Bulk spreadsheet import is not provided.
 
-Work searches, filters (status, category, kind, priority), sorting, and 48-record pagination run on the server. Work shares the single controlling page and stale-record safeguards with Journey.
+Work searches, filters (status, category, kind, priority, source), sorting, and 48-record pagination run on the server. Work shares the single controlling page and stale-record safeguards with Journey.
 
 Work data lives in `data/editing.sqlite3` by default and is excluded from Git. It never creates catalog commits or pushes. Open the **Local storage** button in the header for **Download backup**, which produces a consistent SQLite snapshot, or **Export JSON**, which downloads all categories and works, including Trash. The first successful write each local day also creates a snapshot under `data/work-backups/`, retaining the latest seven daily snapshots for that database. Backup failures are logged separately from successful primary saves. These files are local: include them in your computer's backup plan.
+
+On startup, existing Work databases upgrade automatically to schema version 2. The migration explicitly sets `source_ongoing = false` for every existing entry, including Tasks and Trash, preserving all records and other field values. No database recreation or manual migration is needed.
 
 To restore a downloaded SQLite backup, stop the server, copy the backup over the configured Work database, and restart. Keep a copy of the database you are replacing. See [the Work data contract](docs/work-profile.md) for storage and API details.
 

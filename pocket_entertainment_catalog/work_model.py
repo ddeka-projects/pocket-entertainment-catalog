@@ -16,6 +16,7 @@ FIELDS = {
     "work_title",
     "unit_title",
     "kind",
+    "source_ongoing",
     "category_id",
     "status",
     "priority",
@@ -60,6 +61,10 @@ def validate_work(record: Mapping[str, Any]) -> dict[str, Any]:
             raise ModelError(f"{field} must be trimmed single-line text.")
     if value["kind"] not in KINDS:
         raise ModelError("kind must be project or task.")
+    if not isinstance(value["source_ongoing"], bool):
+        raise ModelError("source_ongoing must be a boolean.")
+    if value["kind"] == "task" and value["source_ongoing"]:
+        raise ModelError("Source Ongoing applies only to projects.")
     if not isinstance(value["category_id"], str) or not value["category_id"]:
         raise ModelError("Choose an existing category.")
     if value["status"] not in STATUSES:

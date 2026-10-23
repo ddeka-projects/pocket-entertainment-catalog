@@ -187,8 +187,9 @@ a:focus-visible {
 }
 .backup-link { display: inline-flex; align-items: center; text-decoration: none; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 28px 0; color: var(--muted-strong); font-size: 0.8rem; }
-.work-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 0.7rem; }
+.work-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; color: var(--muted); font-size: 0.7rem; }
 .priority-badge[data-priority="high"] { color: var(--accent-bright); }
+.source-ongoing-badge { padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
 .category-list { margin-top: 25px; }
 .category-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 17px 0; border-top: 1px solid var(--line); }
 .category-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
@@ -921,6 +922,10 @@ a:focus-visible {
 .field select:focus,
 .field textarea:focus { border-color: rgba(232, 184, 106, 0.55); }
 .field small { color: #747981; font-size: 0.68rem; line-height: 1.4; }
+.source-field[hidden] { display: none; }
+.source-toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.source-toggle input[type="checkbox"] { width: 20px; height: 20px; min-height: 20px; margin: 0; padding: 0; accent-color: var(--accent); }
+.source-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .required { color: var(--accent); }
 
 .rating-picker {

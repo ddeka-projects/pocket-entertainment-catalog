@@ -218,6 +218,7 @@ class HTTPApplicationTests(unittest.TestCase):
             )
             self.assertEqual(201, status)
             entry = response["entry"]
+            self.assertIs(False, entry["record"]["source_ongoing"])
             route = "/api/work/entries/" + entry["record"]["id"]
             headers["If-Match"] = entry["etag"]
             self.assertEqual(
@@ -268,6 +269,81 @@ class HTTPApplicationTests(unittest.TestCase):
             400, self.call(path + "/uncategorized", method="DELETE", headers=headers)[0]
         )
 
+    def test_work_source_ongoing_can_be_edited_and_filtered_after_finishing(self):
+        headers = self.work_owner()
+        for terminal in ("completed", "discontinued"):
+            payload = {
+                "work_title": "Still releasing",
+                "kind": "project",
+                "category_id": "uncategorized",
+                "status": terminal,
+                "priority": "high",
+                "source_ongoing": True,
+            }
+            status, created = self.call(
+                "/api/work/legacy", method="POST", payload=payload, headers=headers
+            )
+            self.assertEqual(201, status)
+            entry = created["entry"]
+            self.assertIs(True, entry["record"]["source_ongoing"])
+            route = "/api/work/entries/" + entry["record"]["id"]
+            for enabled in (False, True):
+                status, saved = self.call(
+                    route,
+                    method="PATCH",
+                    payload={"source_ongoing": enabled},
+                    headers=headers | {"If-Match": entry["etag"]},
+                )
+                self.assertEqual(200, status)
+                self.assertEqual(
+                    entry["record"]
+                    | {
+                        "source_ongoing": enabled,
+                        "updated_at": saved["entry"]["record"]["updated_at"],
+                    },
+                    saved["entry"]["record"],
+                )
+                self.assertEqual(
+                    412,
+                    self.call(
+                        route,
+                        method="PATCH",
+                        payload={"source_ongoing": not enabled},
+                        headers=headers | {"If-Match": entry["etag"]},
+                    )[0],
+                )
+                entry = saved["entry"]
+            self.assertEqual(
+                423,
+                self.call(
+                    route,
+                    method="PATCH",
+                    payload={"source_ongoing": False},
+                    headers={"If-Match": entry["etag"]},
+                )[0],
+            )
+            status, filtered = self.call(
+                f"/api/work/catalog?source_ongoing=true&status={terminal}&priority=high&kind=project"
+            )
+            self.assertEqual(200, status)
+            self.assertEqual([entry], filtered["entries"])
+        task = {"work_title": "Task", "kind": "task", "category_id": "uncategorized"}
+        self.assertEqual(
+            400,
+            self.call("/api/work/entries", method="POST", payload=task | {"source_ongoing": True})[
+                0
+            ],
+        )
+        status, created = self.call("/api/work/entries", method="POST", payload=task)
+        self.assertEqual(201, status)
+        self.assertIs(False, created["entry"]["record"]["source_ongoing"])
+        self.assertEqual([], self.call("/api/work/catalog?source_ongoing=false")[1]["entries"])
+        exported = self.call("/api/work/export")[1]
+        self.assertEqual(2, exported["schema_version"])
+        self.assertEqual(
+            [True, True, False], [record["source_ongoing"] for record in exported["works"]]
+        )
+
     def test_work_requests_share_the_origin_checks_and_filter_validation(self):
         headers = self.work_owner() | {"Origin": "http://untrusted.example"}
         self.assertEqual(
@@ -276,6 +352,10 @@ class HTTPApplicationTests(unittest.TestCase):
         self.assertEqual(400, self.call("/api/work/catalog?page_size=1000")[0])
         self.assertEqual(400, self.call("/api/work/catalog?status=all&status=planned")[0])
         self.assertEqual(400, self.call("/api/work/catalog?unknown=value")[0])
+        self.assertEqual(400, self.call("/api/work/catalog?source_ongoing=yes")[0])
+        self.assertEqual(
+            400, self.call("/api/work/catalog?source_ongoing=true&source_ongoing=false")[0]
+        )
         self.assertEqual(200, self.call("/static/work.js")[0])
 
     def test_work_backup_download_is_sqlite(self):
@@ -286,7 +366,7 @@ class HTTPApplicationTests(unittest.TestCase):
             self.assertTrue(response.read().startswith(b"SQLite format 3\0"))
         status, exported = self.call("/api/work/export")
         self.assertEqual(200, status)
-        self.assertEqual(1, exported["schema_version"])
+        self.assertEqual(2, exported["schema_version"])
         self.assertEqual([], exported["works"])
 
     def test_explicit_legacy_route_requires_ownership_and_keeps_normal_creation_strict(self):

@@ -18,6 +18,8 @@ from .storage import CatalogBusy, CatalogConflict, CatalogNotFound, StorageError
 from .work_model import UNCATEGORIZED, category_name, validate_work
 
 
+# Keep the version 1 base schema so fresh databases and existing installations
+# follow the same transactional migration path.
 SCHEMA = """
 CREATE TABLE metadata (revision INTEGER NOT NULL);
 INSERT INTO metadata VALUES (0);
@@ -72,6 +74,7 @@ WORK_COLUMNS = (
     "work_title",
     "unit_title",
     "kind",
+    "source_ongoing",
     "category_id",
     "status",
     "priority",
@@ -110,7 +113,18 @@ class WorkStore:
                     + triggers
                     + "INSERT INTO categories VALUES ('uncategorized','Uncategorized','uncategorized');"
                 )
-            elif version != 1:
+                version = 1
+            if version == 1:
+                # execute (not executescript) keeps DDL, backfill, and version in
+                # the open transaction. Preserve every other field, including
+                # timestamps; revision triggers still observe the explicit update.
+                db.execute(
+                    "ALTER TABLE works ADD COLUMN source_ongoing INTEGER NOT NULL DEFAULT 0 "
+                    "CHECK(source_ongoing IN (0,1) AND (kind = 'project' OR source_ongoing = 0))"
+                )
+                db.execute("UPDATE works SET source_ongoing = 0")
+                db.execute("PRAGMA user_version = 2")
+            elif version != 2:
                 raise StorageError("Unsupported Work database version.")
         self._ready = True
 
@@ -152,6 +166,7 @@ class WorkStore:
     def _stored(row: sqlite3.Row) -> StoredRecord:
         value = {column: row[column] for column in WORK_COLUMNS if column not in DATE_FIELDS}
         value["legacy_history"] = bool(value["legacy_history"])
+        value["source_ongoing"] = bool(value["source_ongoing"])
         value["dates"] = {field: row[field] for field in DATE_FIELDS}
         return StoredRecord(value, record_etag(value))
 
@@ -268,6 +283,7 @@ class WorkStore:
             "category",
             "kind",
             "priority",
+            "source_ongoing",
             "search",
             "sort",
             "direction",
@@ -301,6 +317,12 @@ class WorkStore:
             else:
                 clauses.append(f"w.{column} = ?")
                 args.append(item)
+        source_ongoing = query.get("source_ongoing", "all")
+        if source_ongoing not in {"all", "true", "false"}:
+            raise InvalidRequest("Invalid source_ongoing filter.")
+        if source_ongoing != "all":
+            clauses.extend(["w.kind = 'project'", "w.source_ongoing = ?"])
+            args.append(1 if source_ongoing == "true" else 0)
         search = query.get("search", "").strip()
         if len(search) > 1000:
             raise InvalidRequest("Search is too long.")
@@ -375,7 +397,7 @@ class WorkStore:
     def export(self) -> dict[str, Any]:
         with self.connection() as db:
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "categories": [
                     dict(row)
                     for row in db.execute("SELECT id,name FROM categories ORDER BY name_key")

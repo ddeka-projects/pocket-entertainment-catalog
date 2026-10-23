@@ -38,7 +38,15 @@ class WorkService:
         return self._create(payload, legacy=True)
 
     def _create(self, payload: Mapping[str, Any], *, legacy: bool) -> dict[str, Any]:
-        fields = {"work_title", "unit_title", "kind", "category_id", "release_year", "notes"}
+        fields = {
+            "work_title",
+            "unit_title",
+            "kind",
+            "source_ongoing",
+            "category_id",
+            "release_year",
+            "notes",
+        }
         required = {"work_title", "kind", "category_id"}
         if legacy:
             fields |= {"status", "priority"}
@@ -53,6 +61,7 @@ class WorkService:
                 payload.get("unit_title"), "unit_title", 200
             ),
             "kind": payload["kind"],
+            "source_ongoing": payload.get("source_ongoing", False),
             "category_id": payload["category_id"],
             "status": payload["status"] if legacy else "investigate",
             "priority": payload.get("priority") if legacy else None,
@@ -77,6 +86,7 @@ class WorkService:
                 "work_title",
                 "unit_title",
                 "kind",
+                "source_ongoing",
                 "category_id",
                 "release_year",
                 "notes",
@@ -96,9 +106,11 @@ class WorkService:
                         else CatalogService._required_title
                     )
                     record[field] = cleaner(payload[field], field, maximum)
-            for field in ("kind", "category_id", "priority"):
+            for field in ("kind", "category_id", "priority", "source_ongoing"):
                 if field in payload:
                     record[field] = payload[field]
+            if record["kind"] == "task" and "source_ongoing" not in payload:
+                record["source_ongoing"] = False
             if "release_year" in payload:
                 record["release_year"] = CatalogService._release_year(payload["release_year"])
             if "notes" in payload:

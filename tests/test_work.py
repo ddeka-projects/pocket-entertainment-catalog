@@ -6,12 +6,17 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from pocket_entertainment_catalog.model import DATE_FIELDS, ModelError, new_record_id
-from pocket_entertainment_catalog.service import InvalidRequest, InvalidTransition
-from pocket_entertainment_catalog.storage import CatalogConflict
+from pocket_entertainment_catalog.model import (
+    DATE_FIELDS,
+    STATUS_DATE_FIELDS,
+    ModelError,
+    new_record_id,
+)
+from pocket_entertainment_catalog.service import DeletedEntry, InvalidRequest, InvalidTransition
+from pocket_entertainment_catalog.storage import CatalogConflict, StorageError
 from pocket_entertainment_catalog.work_model import validate_work
 from pocket_entertainment_catalog.work_service import WorkService
-from pocket_entertainment_catalog.work_storage import WorkStore
+from pocket_entertainment_catalog.work_storage import SCHEMA, WorkStore
 
 
 class WorkTests(unittest.TestCase):
@@ -47,6 +52,8 @@ class WorkTests(unittest.TestCase):
             ["Uncategorized"], [c["name"] for c in self.service.catalog({})["categories"]]
         )
         entry = self.create()
+        self.assertIs(False, entry["record"]["source_ongoing"])
+        self.assertIs(False, self.create(kind="task")["record"]["source_ongoing"])
         restarted = WorkService(WorkStore(self.path))
         self.assertEqual(entry, restarted.entry(entry["record"]["id"])["entry"])
 
@@ -60,6 +67,7 @@ class WorkTests(unittest.TestCase):
             self.assertEqual(status, entry["record"]["status"])
             self.assertEqual(priority, entry["record"]["priority"])
             self.assertTrue(entry["record"]["legacy_history"])
+            self.assertIs(False, entry["record"]["source_ongoing"])
             self.assertEqual(dict.fromkeys(DATE_FIELDS), entry["record"]["dates"])
         ordinary = self.create()
         self.assertFalse(ordinary["record"]["legacy_history"])
@@ -121,6 +129,209 @@ class WorkTests(unittest.TestCase):
         )["entry"]
         self.assertEqual(a["record"]["id"], updated["record"]["id"])
         self.assertEqual(b, self.service.entry(b["record"]["id"])["entry"])
+
+    def test_source_ongoing_can_be_toggled_independently_in_every_status(self):
+        for status in ("investigate", "planned", "ongoing", "paused", "completed", "discontinued"):
+            with self.subTest(status=status):
+                entry = self.service.create_legacy(
+                    {
+                        "work_title": "Still releasing",
+                        "kind": "project",
+                        "category_id": "uncategorized",
+                        "status": status,
+                        "priority": None if status == "investigate" else "low",
+                        "source_ongoing": True,
+                    }
+                )["entry"]
+                for enabled in (False, True):
+                    previous = entry
+                    entry = self.service.update(
+                        entry["record"]["id"],
+                        {"source_ongoing": enabled},
+                        expected_etag=entry["etag"],
+                    )["entry"]
+                    self.assertEqual(
+                        previous["record"]
+                        | {
+                            "source_ongoing": enabled,
+                            "updated_at": entry["record"]["updated_at"],
+                        },
+                        entry["record"],
+                    )
+                    self.assertGreater(
+                        entry["record"]["updated_at"], previous["record"]["updated_at"]
+                    )
+                    self.assertNotEqual(previous["etag"], entry["etag"])
+                    with self.assertRaises(CatalogConflict):
+                        self.service.update(
+                            entry["record"]["id"],
+                            {"source_ongoing": not enabled},
+                            expected_etag=previous["etag"],
+                        )
+                self.assertEqual(
+                    entry,
+                    self.service.update(
+                        entry["record"]["id"],
+                        {"source_ongoing": True},
+                        expected_etag=entry["etag"],
+                    )["entry"],
+                )
+        self.assertEqual(6, self.service.catalog({})["total"])
+
+    def test_source_ongoing_survives_lifecycle_dates_categories_trash_and_restart(self):
+        category = self.category("Manga")
+        entry = self.create(source_ongoing=True, category_id=category["id"])
+        for status in ("planned", "ongoing", "paused", "ongoing", "completed"):
+            entry = self.transition(
+                entry, status, **({"priority": "high"} if status == "planned" else {})
+            )
+            self.assertIs(True, entry["record"]["source_ongoing"])
+        entry = self.service.correct_history(
+            entry["record"]["id"],
+            {"dates": dict.fromkeys(DATE_FIELDS, "2020-01-01")},
+            expected_etag=entry["etag"],
+        )["entry"]
+        self.store.change_category(
+            category_id=category["id"], expected_etag=category["etag"], delete=True
+        )
+        entry = self.service.entry(entry["record"]["id"])["entry"]
+        entry = self.service.delete(entry["record"]["id"], expected_etag=entry["etag"])["entry"]
+        self.assertIs(True, self.store.export()["works"][0]["source_ongoing"])
+        with self.assertRaises(DeletedEntry):
+            self.service.update(
+                entry["record"]["id"], {"source_ongoing": False}, expected_etag=entry["etag"]
+            )
+        entry = self.service.restore(entry["record"]["id"], expected_etag=entry["etag"])["entry"]
+        self.assertIs(True, entry["record"]["source_ongoing"])
+        self.assertEqual(
+            entry, WorkService(WorkStore(self.path)).entry(entry["record"]["id"])["entry"]
+        )
+        backup = self.path.with_name("source-backup.sqlite3")
+        self.store.backup(backup)
+        self.assertEqual(
+            entry, WorkService(WorkStore(backup)).entry(entry["record"]["id"])["entry"]
+        )
+
+    def test_source_ongoing_requires_a_boolean_and_is_only_enabled_for_projects(self):
+        entry = self.create()
+        for value in (None, 0, 1, "false", "true", [], {}):
+            with self.subTest(value=value):
+                with self.assertRaises(ModelError):
+                    self.create(source_ongoing=value)
+                with self.assertRaises(ModelError):
+                    self.service.update(
+                        entry["record"]["id"],
+                        {"source_ongoing": value},
+                        expected_etag=entry["etag"],
+                    )
+        self.assertEqual(entry, self.service.entry(entry["record"]["id"])["entry"])
+        with self.assertRaises(ModelError):
+            self.create(kind="task", source_ongoing=True)
+        task = self.create(kind="task")
+        with self.assertRaises(ModelError):
+            self.service.update(
+                task["record"]["id"], {"source_ongoing": True}, expected_etag=task["etag"]
+            )
+        project = self.service.update(
+            task["record"]["id"],
+            {"kind": "project", "source_ongoing": True},
+            expected_etag=task["etag"],
+        )["entry"]
+        with self.assertRaises(ModelError):
+            self.service.update(
+                project["record"]["id"],
+                {"kind": "task", "source_ongoing": True},
+                expected_etag=project["etag"],
+            )
+        task = self.service.update(
+            project["record"]["id"], {"kind": "task"}, expected_etag=project["etag"]
+        )["entry"]
+        self.assertIs(False, task["record"]["source_ongoing"])
+        project = self.service.update(
+            task["record"]["id"], {"kind": "project"}, expected_etag=task["etag"]
+        )["entry"]
+        self.assertIs(False, project["record"]["source_ongoing"])
+
+    def test_source_filters_combine_with_existing_filters_and_pagination(self):
+        category = self.category("Manga")
+        base = {
+            "work_title": "Manga edit",
+            "kind": "project",
+            "category_id": category["id"],
+            "status": "completed",
+            "priority": "high",
+        }
+        completed = self.service.create_legacy(base | {"source_ongoing": True})["entry"]
+        self.service.create_legacy(base | {"priority": "low"})
+        self.create(source_ongoing=True)
+        self.create(kind="task")
+        trash = self.create(source_ongoing=True)
+        self.service.delete(trash["record"]["id"], expected_etag=trash["etag"])
+        selected = self.service.catalog(
+            {
+                "source_ongoing": "true",
+                "status": "completed",
+                "priority": "high",
+                "category": category["id"],
+                "kind": "project",
+                "search": "manga",
+            }
+        )
+        self.assertEqual([completed], selected["entries"])
+        self.assertEqual(4, selected["counts"]["all"])
+        self.assertEqual(1, self.service.catalog({"source_ongoing": "false"})["total"])
+        for value in ("true", "false"):
+            self.assertEqual(
+                0, self.service.catalog({"source_ongoing": value, "kind": "task"})["total"]
+            )
+        self.assertEqual(
+            1, self.service.catalog({"source_ongoing": "true", "status": "trash"})["total"]
+        )
+        page = self.service.catalog(
+            {
+                "source_ongoing": "true",
+                "page_size": "1",
+                "page": "2",
+                "sort": "title",
+                "direction": "desc",
+            }
+        )
+        self.assertEqual(
+            (2, 2, 2, 1), (page["total"], page["pages"], page["page"], len(page["entries"]))
+        )
+        self.assertEqual(4, self.service.catalog({"source_ongoing": "all"})["total"])
+        for value in ("", "1", "0", "yes", "TRUE"):
+            with self.assertRaises(InvalidRequest):
+                self.service.catalog({"source_ongoing": value})
+
+    def test_sql_enforces_source_constraints_and_defaults_new_rows_to_false(self):
+        project = self.create(source_ongoing=True)
+        task = self.create(kind="task")
+        for entry, value in ((project, None), (project, 2), (project, "true"), (task, 1)):
+            with self.assertRaises(InvalidRequest):
+                with self.store.connection(write=True) as db:
+                    db.execute(
+                        "UPDATE works SET source_ongoing = ? WHERE id = ?",
+                        (value, entry["record"]["id"]),
+                    )
+            self.assertEqual(entry, self.service.entry(entry["record"]["id"])["entry"])
+        with self.assertRaises(InvalidRequest):
+            with self.store.connection(write=True) as db:
+                db.execute(
+                    "UPDATE works SET kind = 'task' WHERE id = ?", (project["record"]["id"],)
+                )
+        with self.store.connection(write=True) as db:
+            columns = [
+                row[1]
+                for row in db.execute("PRAGMA table_info(works)")
+                if row[1] not in {"sequence", "id", "source_ongoing"}
+            ]
+            record_id = new_record_id("SQL default", project["record"]["created_at"])
+            db.execute(
+                f"INSERT INTO works (id,{','.join(columns)}) SELECT ?,{','.join(columns)} FROM works WHERE id = ?",
+                (record_id, project["record"]["id"]),
+            )
+        self.assertIs(False, self.store.get(record_id).value["source_ongoing"])
 
     def test_priority_is_atomic_with_planning_and_statuses_are_sequential(self):
         entry = self.create()
@@ -348,8 +559,6 @@ class WorkTests(unittest.TestCase):
     def test_unsupported_database_versions_are_not_overwritten(self):
         with closing(sqlite3.connect(self.path)) as db:
             db.execute("PRAGMA user_version=999")
-        from pocket_entertainment_catalog.storage import StorageError
-
         with self.assertRaises(StorageError):
             WorkStore(self.path)
 
@@ -398,7 +607,7 @@ class WorkTests(unittest.TestCase):
         entry = self.create()
         self.service.delete(entry["record"]["id"], expected_etag=entry["etag"])
         exported = self.store.export()
-        self.assertEqual(1, exported["schema_version"])
+        self.assertEqual(2, exported["schema_version"])
         self.assertEqual(1, len(exported["works"]))
         self.assertIsNotNone(exported["works"][0]["deleted_at"])
         backups = list((self.path.parent / "work-backups").glob("*.sqlite3"))
@@ -434,3 +643,148 @@ class WorkTests(unittest.TestCase):
             with self.assertLogs("pocket_entertainment_catalog.work_storage", level="ERROR"):
                 entry = self.create()
         self.assertEqual(entry, self.service.entry(entry["record"]["id"])["entry"])
+
+
+class WorkMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "version-1.sqlite3"
+        # Start with the original version 1 schema, before source_ongoing exists.
+        with closing(sqlite3.connect(self.path)) as db:
+            db.executescript(SCHEMA)
+            db.executemany(
+                "INSERT INTO categories VALUES (?,?,?)",
+                [("uncategorized", "Uncategorized", "uncategorized"), ("manga", "Manga", "manga")],
+            )
+            for table in ("works", "categories"):
+                for action in ("INSERT", "UPDATE", "DELETE"):
+                    db.execute(
+                        f"CREATE TRIGGER revision_{table}_{action} AFTER {action} ON {table} "
+                        "BEGIN UPDATE metadata SET revision = revision + 1; END"
+                    )
+            n = 0
+            for kind in ("project", "task"):
+                for status in STATUS_DATE_FIELDS:
+                    for legacy in (False, True):
+                        for deleted in (False, True):
+                            n += 1
+                            row = {
+                                "sequence": n * 3,
+                                "id": new_record_id("Existing work", "2020-01-01T00:00:00.000Z"),
+                                "work_title": f"Existing work {n}",
+                                "unit_title": "Season 2" if n % 2 else None,
+                                "kind": kind,
+                                "category_id": "manga" if n % 2 else "uncategorized",
+                                "status": status,
+                                "priority": (
+                                    None if status == "investigate" else "high" if n % 2 else "low"
+                                ),
+                                "release_year": 2020 if n % 2 else None,
+                                "notes": "Keep these notes. 漫画\nSecond line." if n % 2 else None,
+                                **{
+                                    field: (
+                                        "2020-01-01"
+                                        if not legacy and field in STATUS_DATE_FIELDS[status]
+                                        else None
+                                    )
+                                    for field in DATE_FIELDS
+                                },
+                                "created_at": "2020-01-01T00:00:00.000Z",
+                                "updated_at": "2020-01-03T00:00:00.000Z",
+                                "deleted_at": "2020-01-02T00:00:00.000Z" if deleted else None,
+                                "legacy_history": int(legacy),
+                            }
+                            db.execute(
+                                f"INSERT INTO works ({','.join(row)}) VALUES ({','.join('?' for _ in row)})",
+                                list(row.values()),
+                            )
+            db.commit()
+        self.before = self.snapshot()
+
+    def snapshot(self):
+        with closing(sqlite3.connect(self.path)) as db:
+            db.row_factory = sqlite3.Row
+            return {
+                "version": db.execute("PRAGMA user_version").fetchone()[0],
+                "columns": [row[1] for row in db.execute("PRAGMA table_info(works)")],
+                "works": [dict(row) for row in db.execute("SELECT * FROM works ORDER BY sequence")],
+                "categories": [
+                    dict(row) for row in db.execute("SELECT * FROM categories ORDER BY id")
+                ],
+                "sequences": [tuple(row) for row in db.execute("SELECT * FROM sqlite_sequence")],
+                "revision": db.execute("SELECT revision FROM metadata").fetchone()[0],
+                "schema": [
+                    tuple(row)
+                    for row in db.execute(
+                        "SELECT type,name,sql FROM sqlite_master WHERE type IN ('index','trigger') ORDER BY name"
+                    )
+                ],
+            }
+
+    def test_v1_migration_explicitly_backfills_every_row_and_preserves_existing_values(self):
+        self.assertEqual(1, self.before["version"])
+        self.assertNotIn("source_ongoing", self.before["columns"])
+        store = WorkStore(self.path)
+        after = self.snapshot()
+        self.assertEqual(2, after["version"])
+        self.assertEqual(self.before["columns"] + ["source_ongoing"], after["columns"])
+        self.assertEqual(len(self.before["works"]), len(after["works"]))
+        for previous, migrated in zip(self.before["works"], after["works"]):
+            self.assertEqual(previous | {"source_ongoing": 0}, migrated)
+            self.assertIs(False, store.get(previous["id"]).value["source_ongoing"])
+            validate_work(store.get(previous["id"]).value)
+        for key in ("categories", "sequences", "schema"):
+            self.assertEqual(self.before[key], after[key])
+        # Each row fired its original UPDATE revision trigger: the backfill is
+        # explicit, rather than relying only on SQLite's added-column default.
+        self.assertEqual(self.before["revision"] + len(after["works"]), after["revision"])
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual("ok", db.execute("PRAGMA integrity_check").fetchone()[0])
+            self.assertEqual([], db.execute("PRAGMA foreign_key_check").fetchall())
+        self.assertEqual(len(after["works"]), len(store.export()["works"]))
+
+    def test_migration_failure_rolls_back_schema_rows_revision_and_version_then_can_retry(self):
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute(
+                "CREATE TRIGGER fail_backfill BEFORE UPDATE ON works BEGIN SELECT RAISE(ABORT, 'simulated migration failure'); END"
+            )
+        before = self.snapshot()
+        with self.assertRaises(InvalidRequest):
+            WorkStore(self.path)
+        self.assertEqual(before, self.snapshot())
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("DROP TRIGGER fail_backfill")
+        WorkStore(self.path)
+        self.assertEqual(2, self.snapshot()["version"])
+
+    def test_reopening_migrated_database_preserves_flags_and_defaults_new_entries(self):
+        service = WorkService(WorkStore(self.path))
+        row = next(
+            row
+            for row in self.before["works"]
+            if row["kind"] == "project"
+            and row["status"] == "completed"
+            and row["deleted_at"] is None
+        )
+        entry = service.entry(row["id"])["entry"]
+        entry = service.update(row["id"], {"source_ongoing": True}, expected_etag=entry["etag"])[
+            "entry"
+        ]
+        before_restart = self.snapshot()
+        restarted = WorkService(WorkStore(self.path))
+        self.assertEqual(before_restart, self.snapshot())
+        self.assertEqual(entry, restarted.entry(row["id"])["entry"])
+        for kind in ("project", "task"):
+            payload = {"work_title": "After migration", "kind": kind, "category_id": "manga"}
+            self.assertIs(False, restarted.create(payload)["entry"]["record"]["source_ongoing"])
+            self.assertIs(
+                False,
+                restarted.create_legacy(payload | {"status": "completed", "priority": "low"})[
+                    "entry"
+                ]["record"]["source_ongoing"],
+            )
+        task = next(row for row in self.before["works"] if row["kind"] == "task")
+        with self.assertRaises(InvalidRequest):
+            with restarted.store.connection(write=True) as db:
+                db.execute("UPDATE works SET source_ongoing = 1 WHERE id = ?", (task["id"],))

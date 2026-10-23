@@ -2,9 +2,10 @@
 const mockNodes = new Map();
 function mockNode(selector) {
   if (!mockNodes.has(selector)) mockNodes.set(selector, {
-    innerHTML: "", textContent: "", value: "", hidden: false, dataset: {},
+    innerHTML: "", textContent: "", value: "", hidden: false, dataset: {}, listeners: {},
     classList: { add() {}, remove() {} },
-    setAttribute() {}, removeAttribute() {}, addEventListener() {}, append() {}, remove() {},
+    setAttribute() {}, removeAttribute() {}, append() {}, remove() {},
+    addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); },
     querySelector(s) { return mockNode(selector + " " + s); },
     querySelectorAll() { return []; },
   });

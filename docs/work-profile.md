@@ -1,10 +1,12 @@
 # Work profile data contract
 
-Work is a separate editing backlog, independent of Journey, Clip Selector folders, Premiere projects, and exported media filenames. Projects and tasks are peer work kinds, with the same lifecycle and metadata. SQLite is accessed through Python's standard library. It requires no additional service or installed dependency.
+Work is a separate editing backlog, independent of Journey, Clip Selector folders, Premiere projects, and exported media filenames. Projects and tasks are peer work kinds, with the same lifecycle and shared metadata; Source Ongoing applies only to projects. SQLite is accessed through Python's standard library. It requires no additional service or installed dependency.
 
 ## Storage
 
-`POCKET_ENTERTAINMENT_CATALOG_WORK_DATA` defaults to `data/editing.sqlite3`. SQLite `user_version` is 1; an unrecognized version is rejected. The initial database contains an empty `works` table and one reserved category, `uncategorized` / `Uncategorized`. Database initialization is transactional.
+`POCKET_ENTERTAINMENT_CATALOG_WORK_DATA` defaults to `data/editing.sqlite3`. SQLite `user_version` is 2; an unrecognized version is rejected. The initial database contains an empty `works` table and one reserved category, `uncategorized` / `Uncategorized`. Database initialization is transactional.
+
+Version 1 databases migrate automatically on startup in a single write transaction: add the non-null `source_ongoing` column with a default of 0, explicitly backfill every existing work to 0, then advance `user_version` to 2. This includes every kind, lifecycle status, legacy record, and Trash entry. IDs, sequence/order, categories, dates, timestamps, and all other work fields are preserved. Revision triggers still observe the backfill. Failure rolls back the column, backfill, revision changes, and version together; restarting after success does not reset any flags. Existing databases and restored version 1 SQLite backups need no manual recreation.
 
 Each request owns its SQLite connection. Foreign keys are enabled on every connection. Writes take a short `BEGIN IMMEDIATE` transaction with a five-second busy timeout. This serializes writes before checking the opened record's ETag, so stale versions cannot overwrite newer changes. SQLite handles journaled commits and rollback. The database stays on the server's local disk.
 
@@ -18,6 +20,7 @@ The `metadata` revision counter is advanced by triggers for all work/category in
 | `work_title` | Required trimmed single-line text, up to 300 characters. Can identify a title, creator, or account. |
 | `unit_title` | Optional trimmed single-line scope, up to 200 characters. |
 | `kind` | `project` or `task`; editable. |
+| `source_ongoing` | Boolean, default false for normal and legacy creation. Indicates a project's source material is still being released, independently of lifecycle status. Always false for tasks; SQLite stores 0/1 with a non-null default and checks. |
 | `category_id` | Required reference to an existing category; defaults to Uncategorized in the creation form. |
 | `status` | `investigate`, `planned`, `ongoing`, `paused`, `completed`, or `discontinued`. |
 | `priority` | Null for Investigate; `high` or `low` in all other statuses. |
@@ -32,6 +35,8 @@ Title/category/unit combinations are deliberately **not unique**: another editin
 Status changes follow the same sequential graph as Journey. Investigate → Planned must include a selected priority in the transition request. Pause/resume preserves Started. Completed and Discontinued are terminal. Dates must include every milestone through the current status, be chronological, and omit milestones beyond that status. Legacy records may instead have all four dates null; partially known legacy history obeys the normal rules. Backdating or filling missing prerequisites requires `adjust_prior_dates: true`.
 
 The date-correction endpoint changes dates only, never status or legacy eligibility. The update endpoint cannot alter technical fields or bypass transitions. Unknown request fields are rejected. Model validation and SQL checks enforce priority/status, required milestones, chronology, timestamp ordering, kinds, and category references.
+
+`source_ongoing` is editable through creation and detail updates for projects in any lifecycle status, including Completed and Discontinued. It does not change status, priority, dates, or other records, and transitions preserve it. Tasks reject `source_ongoing: true`; changing kind to task clears an existing flag when the request omits it. Non-boolean values are rejected. Trash retains the flag and must be restored before editing, following the existing detail-edit rules.
 
 ## Categories
 
@@ -62,7 +67,9 @@ All routes use the existing trusted-LAN, Host, same-origin, and JSON-body polici
 | `GET /api/work/backup` | Download a consistent SQLite backup using the online backup API. |
 | `GET /api/work/export` | Download a versioned JSON snapshot of all categories and works, including Trash. |
 
-Catalog query parameters are `status` (`all`/`trash`/lifecycle), `category` (ID or `all`), `kind`, `priority` (`high`/`low`/`none`/`all`), `search`, `sort` (`journey` for insertion order / `title` / `updated` / `priority`), `direction` (`asc`/`desc`), `page`, and `page_size` (1–100; UI uses 48). Unknown or repeated parameters are rejected. Status summary counts cover the full dataset, independently of active filters. Pagination clamps a now-empty last page after mutations.
+Catalog query parameters are `status` (`all`/`trash`/lifecycle), `category` (ID or `all`), `kind`, `priority` (`high`/`low`/`none`/`all`), `source_ongoing` (`all`/`true`/`false`), `search`, `sort` (`journey` for insertion order / `title` / `updated` / `priority`), `direction` (`asc`/`desc`), `page`, and `page_size` (1–100; UI uses 48). Both explicit source filters return projects only, combined with all other filters; `all` includes projects and tasks. Combining a source filter with `kind=task` returns no entries. Unknown or repeated parameters are rejected. Status summary counts cover the full dataset, independently of active filters. Pagination clamps a now-empty last page after mutations.
+
+Normal and legacy creation accept optional `source_ongoing`; omission means false. `PATCH /api/work/entries/{id}` accepts the boolean independently of other detail fields. Entry, catalog, and JSON export responses always include it as a JSON boolean for every work, including tasks and Trash. JSON export `schema_version` is 2.
 
 ## Backups
 
