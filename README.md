@@ -95,7 +95,7 @@ Logs, including startup failures, go to `logs\server.log` beside the code. The f
 
 The first page opened claims control before any catalog or Work data loads. Another tab or device shows **Take Control** and cannot browse or change data until you select it. Taking control revokes the previous page's requests; that page shows the same gate when it next contacts the server. A save already in progress finishes before control transfers.
 
-There are no ownership heartbeats, timeouts, or polling. Closing an editing sheet keeps control. **Release Control** deliberately gives it up. Refreshing creates a new page, so you may need to take control again. Switching Journey/Work through the profile tabs releases the old page first. Restarting the server clears ownership.
+There are no ownership heartbeats, timeouts, or polling. Closing an editing sheet or the Home Screen app keeps control; there is no manual release button. Refreshing creates a new page, so you may need to take control again. Switching Journey/Work through the profile tabs releases the old page first. Restarting the server clears ownership.
 
 If a connection drops during a save, the app reports that confirmation was lost and asks you to check the catalog before repeating it. Saves are never automatically retried.
 

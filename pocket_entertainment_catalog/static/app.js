@@ -50,7 +50,6 @@ const elements = {
   controlGate: document.querySelector("#control-gate"),
   controlMessage: document.querySelector("#control-message"),
   takeControl: document.querySelector("#take-control"),
-  releaseControl: document.querySelector("#release-control"),
   application: document.querySelector("#application"),
   grid: document.querySelector("#catalog-grid"),
   empty: document.querySelector("#empty-state"),
@@ -152,7 +151,6 @@ async function request(path, options = {}) {
       body,
       cache: "no-store",
       credentials: "same-origin",
-      keepalive: Boolean(options.keepalive),
     });
   } catch (_error) {
     if (method !== "GET" && !path.startsWith("/api/controller/")) {
@@ -520,12 +518,12 @@ async function acquireEditor({ takeover = false } = {}) {
   }
 }
 
-async function releaseControl({ keepalive = false } = {}) {
+async function releaseControl() {
   if (!state.editor.owned) return state.editor.releasing;
   const token = state.editor.token;
   showControlGate("Control released. Take control to open the app here again.");
   const releasing = request("/api/controller/release", {
-    method: "POST", body: { page_id: pageId, token }, keepalive,
+    method: "POST", body: { page_id: pageId, token },
   }).catch(() => {});
   state.editor.releasing = releasing;
   try {
@@ -1167,7 +1165,6 @@ document.querySelectorAll("[data-profile]").forEach((link) => {
 });
 
 elements.takeControl.addEventListener("click", () => startApplication({ takeover: true }));
-elements.releaseControl.addEventListener("click", () => releaseControl());
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && state.editor.owned && !state.sheet.dirty) {
